@@ -19,7 +19,7 @@ app/
 │   ├── middleware.py       # X-Request-ID + one log line per request
 │   └── logging.py          # JSON logs (CloudWatch) outside local
 ├── shared/                 # Reusable building blocks for modules
-│   ├── models.py           # BaseTable (id, audit, soft delete) + schema per module
+│   ├── models.py           # BaseTable (id, audit, soft delete) + service schema (DB_SCHEMA)
 │   ├── repository.py       # BaseRepository: queries, never commits
 │   ├── service.py          # BaseService: business rules + commit (hooks)
 │   ├── router.py           # build_crud_router(): standard CRUD endpoints
@@ -31,7 +31,7 @@ app/
 └── modules/
     ├── accounts/           # Users + auth (email/password, Google OAuth)
     └── notes/              # EXAMPLE module: copy it as a template, then delete it
-        ├── models.py       # Tables (schema "notes" is derived from the folder)
+        ├── models.py       # Tables (all in the "exogena" schema)
         ├── schemas.py      # Request/response Pydantic models
         ├── repository.py   # Data access
         ├── service.py      # Business rules
@@ -51,7 +51,7 @@ app/
 - Services raise domain errors from `app.core.exceptions`; `core/handlers.py` turns them into HTTP responses.
 - Dependencies are injected per request (`Depends(get_note_service)`), so tests can swap any service for a fake.
 - Modules do not import each other's internals. Cross-module references are plain UUIDs (no FK), which keeps each module splittable into its own service.
-- Every table gets `id`, `is_deleted`, `is_active`, `created_at`, `updated_at`, `created_by`, `updated_by`, and lives in the PostgreSQL schema named after its module.
+- Every table gets `id`, `is_deleted`, `is_active`, `created_at`, `updated_at`, `created_by`, `updated_by`, and lives in the single PostgreSQL schema `exogena` (`DB_SCHEMA` in `app/shared/models.py`). Modules split the code, not the database.
 
 ### API contract (for the Next.js front)
 
@@ -114,7 +114,7 @@ Then open http://localhost:8000/docs. Run `make` to list every command.
 - Inject `DATABASE_URL` and `JWT_SECRET` from **Secrets Manager**; never commit them.
 - RDS: `DB_SSL_MODE=require`, not publicly accessible, security group open only to the service. Use a dedicated DB role for the app (DML only) and another for migrations (DDL). Consider RDS Proxy if many tasks share the instance.
 - Connections per task = `WEB_CONCURRENCY × (DB_POOL_SIZE + DB_MAX_OVERFLOW)`; keep the total below the RDS `max_connections`.
-- Run `alembic upgrade head` as a separate step (CI job or one-off ECS task) before rolling out, never at app startup. Alembic uses its own version table (`alembic_version_exogena`) and only touches this service's schemas, because the database is shared.
+- Run `alembic upgrade head` as a separate step (CI job or one-off ECS task) before rolling out, never at app startup. Alembic uses its own version table (`alembic_version_exogena`) and only touches this service's schema, because the database is shared.
 - Health checks: ALB → `/health`, readiness → `/health/ready`.
 - `ENVIRONMENT=production` enforces `COOKIE_SECURE=true`, forbids `*` in CORS and hides `/docs`.
 

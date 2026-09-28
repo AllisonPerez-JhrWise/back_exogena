@@ -2,11 +2,17 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import Principal
 from app.core.exceptions import ConflictError, UnauthorizedError
 from app.core.security import create_access_token, hash_password, verify_password
-from app.modules.accounts.models import AuthProvider, User, UserIdentity
-from app.modules.accounts.repository import UserIdentityRepository, UserRepository
-from app.modules.accounts.schemas import GoogleUser, RegisterRequest
+from app.modules.accounts.models import AuthProvider, RoleCode, User, UserIdentity, UserRole
+from app.modules.accounts.repository import (
+    RoleRepository,
+    UserIdentityRepository,
+    UserRepository,
+    UserRoleRepository,
+)
+from app.modules.accounts.schemas import GoogleUser, NewUserData, RegisterRequest
 from app.shared.models import utc_now
 
 
@@ -106,11 +112,42 @@ class AuthService:
 
 
 class UserService:
+    """Operaciones sobre usuarios. Los métodos que escriben NO hacen commit: se usan
+    dentro de la transacción del service que los llama (p. ej. crear un cliente)."""
+
     def __init__(self, session: AsyncSession):
+        self.session = session
         self.users = UserRepository(session)
+        self.roles = RoleRepository(session)
+        self.user_roles = UserRoleRepository(session)
 
     async def get_active(self, user_id: UUID) -> User:
         user = await self.users.get(user_id)
         if user is None or not user.is_active or not user.can_login:
             raise UnauthorizedError()
         return user
+
+    async def has_any_role(self, user_id: UUID, *codes: RoleCode) -> bool:
+        return await self.user_roles.has_any_role(user_id, codes)
+
+    async def get_or_create_client_user(self, data: NewUserData, actor: Principal) -> User:
+        """Devuelve el usuario con ese email; si no existe lo crea sin acceso (can_login=False).
+        Un usuario existente se reutiliza tal cual: sus datos no se sobrescriben."""
+        user = await self.users.get_by_email(data.email)
+        if user is None:
+            values = data.model_dump()
+            values["email"] = data.email.lower()
+            user = await self.users.add(User(**values, created_by=actor.id))
+        await self.assign_role(user, RoleCode.USUARIO_CLIENTE, actor)
+        return user
+
+    async def assign_role(self, user: User, code: RoleCode, actor: Principal) -> None:
+        """Asigna el rol si el usuario aún no lo tiene."""
+        role = await self.roles.get_by_code(code)
+        if role is None:
+            # Los roles se cargan con la migración: si falta, la base está mal configurada
+            raise RuntimeError(f"Role '{code}' does not exist; run the migrations")
+        if await self.user_roles.get_assignment(user.id, role.id) is None:
+            await self.user_roles.add(
+                UserRole(user_id=user.id, role_id=role.id, created_by=actor.id)
+            )

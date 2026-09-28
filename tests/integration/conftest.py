@@ -5,12 +5,13 @@ services hagan commit() (con join_transaction_mode se vuelve un SAVEPOINT)."""
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import pool, text
+from sqlalchemy import pool, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.config import settings
 from app.core.database import get_session
 from app.main import app
+from app.modules.accounts.models import Role, RoleCode, User, UserRole
 from app.shared.models import SQLModel, load_all_models
 
 
@@ -51,9 +52,22 @@ async def db_session(engine):
 
 
 @pytest.fixture
-async def client(db_session):
+async def roles(db_session):
+    """Carga los roles globales (en producción los crea la migración 0001)."""
+    for code in RoleCode:
+        db_session.add(Role(code=code, name=code.value))
+    await db_session.flush()
+
+
+@pytest.fixture
+async def client(db_session, roles):
     async def override_get_session():
-        yield db_session
+        # Igual que la app real: si la petición falla, se revierte lo que no se confirmó
+        try:
+            yield db_session
+        except Exception:
+            await db_session.rollback()
+            raise
 
     app.dependency_overrides[get_session] = override_get_session
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -81,3 +95,20 @@ def register(client):
         return {"Authorization": f"Bearer {token}"}
 
     return _register
+
+
+@pytest.fixture
+def admin(register, db_session):
+    """Crea un administrador y devuelve sus encabezados Authorization."""
+
+    async def _admin(email: str = "admin@jhrwise.com") -> dict:
+        headers = await register(email)
+        user = (await db_session.execute(select(User).where(User.email == email))).scalar_one()
+        role = (
+            await db_session.execute(select(Role).where(Role.code == RoleCode.ADMIN))
+        ).scalar_one()
+        db_session.add(UserRole(user_id=user.id, role_id=role.id))
+        await db_session.flush()
+        return headers
+
+    return _admin
