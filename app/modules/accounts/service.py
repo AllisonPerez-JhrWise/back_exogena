@@ -82,7 +82,6 @@ class AuthService:
                         email=google_user.email.lower(),
                         first_name=google_user.given_name or google_user.email.split("@")[0],
                         last_name=google_user.family_name or "",
-                        avatar_url=google_user.picture,
                         can_login=True,
                     )
                 )
@@ -92,8 +91,6 @@ class AuthService:
 
         if not self._can_enter(user):
             raise UnauthorizedError("Invalid credentials")
-        if not user.avatar_url and google_user.picture:
-            user = await self.users.update(user, {"avatar_url": google_user.picture})
 
         await self._register_login(user)
         return user

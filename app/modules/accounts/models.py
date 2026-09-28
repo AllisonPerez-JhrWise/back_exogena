@@ -43,7 +43,6 @@ class User(BaseTable):
     last_name: str = Field(max_length=100)
     second_last_name: str | None = Field(default=None, max_length=100)
     phone: str | None = Field(default=None, max_length=30)
-    avatar_url: str | None = None
     # Denegado por defecto: el acceso se habilita explícitamente
     can_login: bool = Field(default=False)
     last_login_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
