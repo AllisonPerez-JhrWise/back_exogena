@@ -4,15 +4,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, UnauthorizedError
 from app.core.security import create_access_token, hash_password, verify_password
-from app.modules.accounts.models import User
-from app.modules.accounts.repository import UserRepository
+from app.modules.accounts.models import AuthProvider, User, UserIdentity
+from app.modules.accounts.repository import UserIdentityRepository, UserRepository
 from app.modules.accounts.schemas import GoogleUser, RegisterRequest
+from app.shared.models import utc_now
 
 
 class AuthService:
+    """Login mínimo (contraseña y Google) sobre user_identities.
+    La política de primer acceso (invitación o creación al entrar) está por definir."""
+
     def __init__(self, session: AsyncSession):
         self.session = session
         self.users = UserRepository(session)
+        self.identities = UserIdentityRepository(session)
 
     async def register(self, data: RegisterRequest) -> User:
         email = data.email.lower()
@@ -22,8 +27,19 @@ class AuthService:
         user = await self.users.add(
             User(
                 email=email,
-                full_name=data.full_name,
-                hashed_password=hash_password(data.password),
+                first_name=data.first_name,
+                middle_name=data.middle_name,
+                last_name=data.last_name,
+                second_last_name=data.second_last_name,
+                can_login=True,
+            )
+        )
+        await self.identities.add(
+            UserIdentity(
+                user_id=user.id,
+                provider=AuthProvider.PASSWORD,
+                subject=email,
+                password_hash=hash_password(data.password),
             )
         )
         await self.session.commit()
@@ -31,42 +47,62 @@ class AuthService:
 
     async def authenticate(self, email: str, password: str) -> User:
         user = await self.users.get_by_email(email)
+        identity = (
+            await self.identities.get_for_user(user.id, AuthProvider.PASSWORD) if user else None
+        )
         # verify_password se ejecuta aunque no exista el usuario,
         # así el tiempo de respuesta no revela qué emails existen
-        valid = verify_password(password, user.hashed_password if user else None)
-        if not user or not valid or not user.is_active:
+        valid = verify_password(password, identity.password_hash if identity else None)
+        if not user or not valid or not self._can_enter(user):
             raise UnauthorizedError("Invalid credentials")
+
+        await self._register_login(user)
         return user
 
     async def login_with_google(self, google_user: GoogleUser) -> User:
-        user = await self.users.get_by_email(google_user.email)
+        identity = await self.identities.get_by_subject(AuthProvider.GOOGLE, google_user.id)
 
-        if user is None:
-            user = await self.users.add(
-                User(
-                    email=google_user.email.lower(),
-                    google_id=google_user.id,
-                    full_name=google_user.name,
-                    avatar_url=google_user.picture,
-                )
-            )
-        else:
-            if not user.is_active:
+        if identity:
+            user = await self.users.get(identity.user_id)
+            if user is None:  # la cuenta de Google pertenece a un usuario borrado
                 raise UnauthorizedError("Invalid credentials")
-            changes = {}
-            if not user.google_id:
-                changes["google_id"] = google_user.id
-            if not user.avatar_url and google_user.picture:
-                changes["avatar_url"] = google_user.picture
-            if changes:
-                user = await self.users.update(user, changes)
+        else:
+            user = await self.users.get_by_email(google_user.email)
+            if user is None:
+                # Comportamiento actual: se crea al entrar.
+                # Cambiará según la política de primer acceso (por definir)
+                user = await self.users.add(
+                    User(
+                        email=google_user.email.lower(),
+                        first_name=google_user.given_name or google_user.email.split("@")[0],
+                        last_name=google_user.family_name or "",
+                        avatar_url=google_user.picture,
+                        can_login=True,
+                    )
+                )
+            await self.identities.add(
+                UserIdentity(user_id=user.id, provider=AuthProvider.GOOGLE, subject=google_user.id)
+            )
 
-        await self.session.commit()
+        if not self._can_enter(user):
+            raise UnauthorizedError("Invalid credentials")
+        if not user.avatar_url and google_user.picture:
+            user = await self.users.update(user, {"avatar_url": google_user.picture})
+
+        await self._register_login(user)
         return user
 
     @staticmethod
     def issue_token(user: User) -> str:
         return create_access_token(subject=user.id, claims={"email": user.email})
+
+    @staticmethod
+    def _can_enter(user: User) -> bool:
+        return user.is_active and user.can_login
+
+    async def _register_login(self, user: User) -> None:
+        await self.users.update(user, {"last_login_at": utc_now()})
+        await self.session.commit()
 
 
 class UserService:
@@ -75,6 +111,6 @@ class UserService:
 
     async def get_active(self, user_id: UUID) -> User:
         user = await self.users.get(user_id)
-        if user is None or not user.is_active:
+        if user is None or not user.is_active or not user.can_login:
             raise UnauthorizedError()
         return user

@@ -12,18 +12,26 @@ class LoginRequest(BaseModel):
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
-    full_name: str | None = Field(default=None, max_length=150)
+    first_name: str = Field(min_length=1, max_length=100)
+    middle_name: str | None = Field(default=None, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    second_last_name: str | None = Field(default=None, max_length=100)
 
 
 class UserRead(BaseModel):
-    """Representación pública del usuario. Nunca agregar hashed_password aquí."""
+    """Representación pública del usuario. Nunca agregar contraseñas ni identidades aquí."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     email: EmailStr
-    username: str | None = None
-    full_name: str | None = None
+    first_name: str
+    middle_name: str | None = None
+    last_name: str
+    second_last_name: str | None = None
+    # Armado a partir de las partes (propiedad del modelo), listo para mostrar
+    full_name: str
+    phone: str | None = None
     avatar_url: str | None = None
     is_active: bool
     created_at: datetime
@@ -41,4 +49,6 @@ class GoogleUser(BaseModel):
     id: str
     email: EmailStr
     name: str | None = None
+    given_name: str | None = None
+    family_name: str | None = None
     picture: str | None = None
