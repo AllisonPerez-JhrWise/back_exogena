@@ -1,4 +1,4 @@
-from app.modules.clients.models import Client, ClientTaxResponsibility, ClientUser
+from app.modules.clients.models import Client, ClientContact, ClientTaxResponsibility
 from app.shared.repository import BaseRepository
 
 
@@ -14,5 +14,5 @@ class ClientTaxResponsibilityRepository(BaseRepository[ClientTaxResponsibility])
     model = ClientTaxResponsibility
 
 
-class ClientUserRepository(BaseRepository[ClientUser]):
-    model = ClientUser
+class ClientContactRepository(BaseRepository[ClientContact]):
+    model = ClientContact

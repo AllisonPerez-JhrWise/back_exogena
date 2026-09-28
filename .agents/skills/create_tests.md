@@ -56,13 +56,19 @@ service.repository = FakeInvoiceRepository()
 
 The `client` fixture uses a session inside a transaction that is rolled back after
 each test (service commits become savepoints), so tests do not affect each other.
+The test database has the platform tables (docker/db-init) and every API request runs as
+`wiseerp_app`, so row-level security applies as in AWS.
 
 ```python
-async def test_invoice_flow(client, register):
-    headers = await register("ana@example.com")        # real user + Bearer token
-    created = await client.post("/api/v1/invoices", json={...}, headers=headers)
+async def test_invoice_flow(client, admin, staff):
+    # admin: headers (Bearer token + X-Tenant-Id) of a firm administrator
+    created = await client.post("/api/v1/invoices", json={...}, headers=admin)
     assert created.status_code == 201
+    # staff(email, role): another person of the firm with that system role
+    asociado = await staff("ana@jhrwise.com", SystemRole.ASOCIADO)
 ```
+
+Prepare platform data with the `platform` fixture (`user`, `tenant`, `member`).
 
 ## Rules
 

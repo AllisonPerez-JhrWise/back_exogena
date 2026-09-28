@@ -26,7 +26,11 @@ class Settings(BaseSettings):
 
     # ── Base de datos ─────────────────────────────────────────────────────────
     # Debe usar el driver async: postgresql+asyncpg://usuario:clave@host:5432/bd
+    # Con el que corre la app. En AWS es wiseerp_app: puede usar las funciones app_* de la
+    # plataforma y la seguridad por filas (RLS) le aplica.
     database_url: str
+    # Con el que corren las migraciones (dueño del schema exogena). Vacío = database_url
+    migration_database_url: str | None = None
     # Por proceso. Conexiones totales = pool_size + max_overflow, por cada worker/tarea
     db_pool_size: int = 5
     db_max_overflow: int = 5
@@ -38,33 +42,24 @@ class Settings(BaseSettings):
     db_version_table: str = "alembic_version_exogena"
 
     # ── Autenticación ─────────────────────────────────────────────────────────────
+    # El login no es de este servicio: lo hace la plataforma con Cognito.
+    # PROVISIONAL hasta tener los datos de Cognito: tokens HS256 firmados con este secreto.
     jwt_secret: str = Field(min_length=32)
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60 * 24
-    auth_cookie_name: str = "access_token"
-    # True en todo entorno servido por HTTPS (AWS)
-    cookie_secure: bool = False
-    # p. ej. ".jhrwise.com" para compartir la cookie entre los subdominios app. y api.
-    cookie_domain: str | None = None
+    # Encabezado con el tenant (organización) en el que trabaja el usuario
+    tenant_header: str = "X-Tenant-Id"
 
     # ── Front-end (Next.js) ──────────────────────────────────────────────
     # Lista JSON: CORS_ORIGINS=["https://app.example.com"]
     cors_origins: list[str] = ["http://localhost:3000"]
-    # A dónde redirige el callback de Google después del login. Vacío = devuelve JSON
-    frontend_url: str | None = None
-
-    # ── Google OAuth (opcional) ──────────────────────────────────────────
-    google_client_id: str | None = None
-    google_client_secret: str | None = None
-    google_redirect_uri: str | None = None
 
     @property
     def is_production(self) -> bool:
         return self.environment == Environment.PRODUCTION
 
     @property
-    def google_enabled(self) -> bool:
-        return all((self.google_client_id, self.google_client_secret, self.google_redirect_uri))
+    def alembic_database_url(self) -> str:
+        return self.migration_database_url or self.database_url
 
     @property
     def db_connect_args(self) -> dict[str, Any]:
@@ -72,13 +67,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_consistency(self) -> "Settings":
-        if not self.database_url.startswith("postgresql+asyncpg://"):
-            raise ValueError("DATABASE_URL must use the postgresql+asyncpg:// driver")
-        if self.is_production:
-            if not self.cookie_secure:
-                raise ValueError("COOKIE_SECURE must be true in production")
-            if "*" in self.cors_origins:
-                raise ValueError("CORS_ORIGINS cannot contain '*' in production")
+        for url in (self.database_url, self.migration_database_url):
+            if url and not url.startswith("postgresql+asyncpg://"):
+                raise ValueError("Database URLs must use the postgresql+asyncpg:// driver")
+        if self.is_production and "*" in self.cors_origins:
+            raise ValueError("CORS_ORIGINS cannot contain '*' in production")
         return self
 
 

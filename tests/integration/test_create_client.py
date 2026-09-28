@@ -1,15 +1,25 @@
-"""POST /api/v1/clients: el formulario "Nuevo cliente" de punta a punta."""
+"""POST /api/v1/clients: el formulario "Nuevo cliente" de punta a punta, sobre la
+plataforma (tenants, users, memberships) con su seguridad por filas."""
 
 import copy
+from uuid import UUID
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.core.exceptions import BusinessRuleError
-from app.modules.accounts.models import Role, RoleCode, User, UserRole
-from app.modules.accounts.service import UserService
-from app.modules.clients.models import Client, ClientUser
+from app.modules.clients.models import Client, ClientContact
 from app.modules.clients.nit import calculate_dv
+from app.modules.clients.service import ClientService
+from app.modules.platform.models import (
+    Membership,
+    MembershipStatus,
+    SystemRole,
+    Tenant,
+    TenantKind,
+    User,
+)
+from tests.integration.conftest import auth_headers
 
 URL = "/api/v1/clients"
 
@@ -65,79 +75,114 @@ async def count(session, model, *conditions) -> int:
     return await session.scalar(select(func.count()).select_from(model).where(*conditions))
 
 
-async def test_admin_creates_client_with_users(client, admin, db_session):
-    response = await client.post(URL, json=PAYLOAD, headers=await admin())
+async def role_of(session, user_id: UUID, tenant_id: UUID) -> tuple[str, str]:
+    """(rol, estado) de la membresía de la persona en el tenant."""
+    row = (
+        await session.execute(
+            text(
+                "SELECT r.code, m.status FROM public.memberships m "
+                "JOIN public.membership_roles mr ON mr.membership_id = m.id "
+                "JOIN public.roles r ON r.id = mr.role_id "
+                "WHERE m.user_id = :user_id AND m.tenant_id = :tenant_id"
+            ),
+            {"user_id": user_id, "tenant_id": tenant_id},
+        )
+    ).one()
+    return row.code, row.status
+
+
+async def test_admin_creates_client_on_the_platform(client, admin, db_session):
+    response = await client.post(URL, json=PAYLOAD, headers=admin)
 
     assert response.status_code == 201, response.text
     data = response.json()["data"]
     assert data["display_name"] == "Comercializadora Andina SAS"
     assert data["trade_name"] == "Andina Comercial"
     assert data["tax_responsibilities"] == ["05", "48", "42"]
-    assert [(u["full_name"], u["position"], u["is_primary_contact"]) for u in data["users"]] == [
-        ("Paula Córdoba", "Contadora", True),
-        ("Carlos Mejía", "Revisor fiscal", False),
+    assert [
+        (u["full_name"], u["role"], u["position"], u["phone"], u["is_primary_contact"])
+        for u in data["users"]
+    ] == [
+        ("Paula Córdoba", "administrador", "Contadora", "+57 310 555 4321", True),
+        ("Carlos Mejía", "cliente", "Revisor fiscal", "+57 315 222 1098", False),
     ]
 
-    # Los usuarios del cliente quedan sin acceso y con el rol usuario_cliente
-    paula = (
-        await db_session.execute(select(User).where(User.email == PAYLOAD["users"][0]["email"]))
-    ).scalar_one()
-    assert paula.can_login is False
-    role_codes = await db_session.scalars(
-        select(Role.code)
-        .join(UserRole, UserRole.role_id == Role.id)
-        .where(UserRole.user_id == paula.id)
+    # El cliente es un tenant de la plataforma
+    tenant = await db_session.get(Tenant, UUID(data["tenant_id"]))
+    assert (tenant.kind, tenant.slug, tenant.name) == (
+        TenantKind.CLIENT,
+        "cliente-900123456",
+        "Comercializadora Andina SAS",
     )
-    assert list(role_codes) == [RoleCode.USUARIO_CLIENTE]
+
+    # Las personas quedan en public.users, sin Cognito (aún no han entrado) e invitadas
+    paula, carlos = (UUID(u["user_id"]) for u in data["users"])
+    assert (await db_session.get(User, paula)).cognito_sub is None
+    assert await role_of(db_session, paula, tenant.id) == ("administrador", "invited")
+    assert await role_of(db_session, carlos, tenant.id) == ("cliente", "invited")
+    assert await count(db_session, ClientContact) == 2
 
 
-async def test_requires_admin(client, register):
+async def test_requires_clientes_crear_in_the_tenant(client, staff, platform, firm):
     assert (await client.post(URL, json=PAYLOAD)).status_code == 401
-    not_admin = await register("colaborador@jhrwise.com")
-    response = await client.post(URL, json=PAYLOAD, headers=not_admin)
+
+    # Sin decir en qué tenant trabaja
+    admin = await staff("admin@jhrwise.com", SystemRole.ADMINISTRADOR)
+    no_tenant = {"Authorization": admin["Authorization"]}
+    assert (await client.post(URL, json=PAYLOAD, headers=no_tenant)).status_code == 400
+
+    # Un asociado puede consultar clientes, pero no crearlos
+    asociado = await staff("asociado@jhrwise.com", SystemRole.ASOCIADO)
+    response = await client.post(URL, json=PAYLOAD, headers=asociado)
     assert response.status_code == 403
     assert response.json()["code"] == "forbidden"
 
+    # Un administrador con la membresía revocada, tampoco
+    revoked = await staff("ex@jhrwise.com", SystemRole.ADMINISTRADOR, MembershipStatus.REVOKED)
+    assert (await client.post(URL, json=PAYLOAD, headers=revoked)).status_code == 403
+
+    # Ni un administrador de la firma que dice trabajar en otro tenant
+    other = await platform.tenant("otra-firma")
+    headers = {**admin, "X-Tenant-Id": str(other)}
+    assert (await client.post(URL, json=PAYLOAD, headers=headers)).status_code == 403
+
 
 async def test_duplicate_nit_is_conflict(client, admin, db_session):
-    headers = await admin()
-    assert (await client.post(URL, json=PAYLOAD, headers=headers)).status_code == 201
+    assert (await client.post(URL, json=PAYLOAD, headers=admin)).status_code == 201
 
-    response = await client.post(URL, json=payload(users=[]), headers=headers)
+    other_people = payload(
+        users=[{**PAYLOAD["users"][0], "email": "otra@andina.com.co"}],
+    )
+    response = await client.post(URL, json=other_people, headers=admin)
     assert response.status_code == 409
     assert await count(db_session, Client, Client.nit == "900123456") == 1
 
 
-async def test_existing_user_is_reused_without_changes(client, admin, db_session):
-    # Carlos es revisor fiscal de Andina y luego de otra empresa
-    headers = await admin()
-    first = await client.post(URL, json=PAYLOAD, headers=headers)
-    carlos_id = first.json()["data"]["users"][1]["user_id"]
+async def test_person_from_another_client_is_not_linked_yet(client, admin, db_session, platform):
+    """La seguridad por filas no deja ver a una persona de otro tenant. Hasta que la
+    plataforma tenga una función para buscarla por email, se rechaza sin guardar nada."""
+    other_client = await platform.tenant("cliente-otro", TenantKind.CLIENT)
+    carlos = await platform.user("carlos.mejia@revisoria.com.co", "Carlos Mejía")
+    await platform.member(carlos, other_client, SystemRole.CLIENTE)
 
-    other = payload(
-        rut={
-            "nit": "800197268",
-            "dv": "4",
-            "legal_name": "Otra Empresa SAS",
-            "tax_responsibilities": [],
-        },
-        users=[
-            {
-                "email": "Carlos.Mejia@revisoria.com.co",  # mismo correo, otra forma de escribirlo
-                "first_name": "Carlitos",
-                "last_name": "Otro",
-                "position": "Revisor fiscal suplente",
-            }
-        ],
-    )
-    response = await client.post(URL, json=other, headers=headers)
+    response = await client.post(URL, json=PAYLOAD, headers=admin)
+
+    assert response.status_code == 409
+    assert response.json()["details"] == {"email": "carlos.mejia@revisoria.com.co"}
+    assert await count(db_session, Client) == 0
+    assert await count(db_session, Tenant, Tenant.slug == "cliente-900123456") == 0
+    assert await count(db_session, User, User.email == "paula.cordoba@andina.com.co") == 0
+
+
+async def test_firm_member_is_reused_without_changes(client, admin, db_session, staff):
+    """Si la persona ya es visible (p. ej. alguien de la firma), se usa tal cual."""
+    await staff("paula.cordoba@andina.com.co", SystemRole.ASOCIADO)
+
+    response = await client.post(URL, json=PAYLOAD, headers=admin)
 
     assert response.status_code == 201, response.text
-    member = response.json()["data"]["users"][0]
-    assert member["user_id"] == carlos_id
-    assert member["full_name"] == "Carlos Mejía"  # sus datos no se sobrescriben
-    assert member["position"] == "Revisor fiscal suplente"  # el cargo es propio de cada cliente
-    assert await count(db_session, User, User.email == "carlos.mejia@revisoria.com.co") == 1
+    assert response.json()["data"]["users"][0]["full_name"] == "Persona Prueba"
+    assert await count(db_session, User, User.email == "paula.cordoba@andina.com.co") == 1
 
 
 @pytest.mark.parametrize(
@@ -153,8 +198,10 @@ async def test_existing_user_is_reused_without_changes(client, admin, db_session
         ({"rut": {"tax_responsibilities": ["05", "05"]}}, "repeated codes"),
         (
             {"users": [{**PAYLOAD["users"][1], "is_primary_contact": True}, PAYLOAD["users"][0]]},
-            "Only one",
+            "Exactly one",
         ),
+        ({"users": [PAYLOAD["users"][1]]}, "Exactly one"),
+        ({"users": []}, "at least 1"),
         ({"users": [PAYLOAD["users"][0], PAYLOAD["users"][0]]}, "repeated emails"),
     ],
     ids=[
@@ -164,11 +211,13 @@ async def test_existing_user_is_reused_without_changes(client, admin, db_session
         "municipio-otro-depto",
         "responsabilidad-repetida",
         "dos-contactos-principales",
+        "sin-contacto-principal",
+        "sin-usuarios",
         "correo-repetido",
     ],
 )
 async def test_invalid_payload_is_rejected(client, admin, db_session, changes, expected):
-    response = await client.post(URL, json=payload(**changes), headers=await admin())
+    response = await client.post(URL, json=payload(**changes), headers=admin)
 
     assert response.status_code == 422
     assert expected in str(response.json()["details"])
@@ -187,28 +236,56 @@ async def test_natural_person_client(client, admin):
             "last_name": "Restrepo",
         }
     )
-    response = await client.post(URL, json=natural, headers=await admin())
+    response = await client.post(URL, json=natural, headers=admin)
 
     assert response.status_code == 201, response.text
     assert response.json()["data"]["display_name"] == "Juan Pablo Restrepo"
 
 
 async def test_nothing_is_saved_if_something_fails(client, admin, db_session, monkeypatch):
-    """Si falla a mitad de camino (aquí, al crear el 2.º usuario), no queda nada guardado."""
-    headers = await admin()
-    original = UserService.get_or_create_client_user
+    """Si falla a mitad de camino (aquí, al crear el 2.º usuario), no queda nada guardado:
+    ni el tenant, ni las personas, ni los datos del RUT."""
+    original = ClientService._get_or_create_user
     calls = {"n": 0}
 
-    async def fail_on_second_user(self, data, actor):
+    async def fail_on_second_user(self, item):
         calls["n"] += 1
         if calls["n"] == 2:
             raise BusinessRuleError("Simulated failure")
-        return await original(self, data, actor)
+        return await original(self, item)
 
-    monkeypatch.setattr(UserService, "get_or_create_client_user", fail_on_second_user)
-    response = await client.post(URL, json=PAYLOAD, headers=headers)
+    monkeypatch.setattr(ClientService, "_get_or_create_user", fail_on_second_user)
+    response = await client.post(URL, json=PAYLOAD, headers=admin)
 
     assert response.status_code == 422
     assert await count(db_session, Client) == 0
-    assert await count(db_session, ClientUser) == 0
+    assert await count(db_session, ClientContact) == 0
+    assert await count(db_session, Tenant, Tenant.kind == TenantKind.CLIENT) == 0
+    assert await count(db_session, Membership) == 1  # solo la del administrador de la firma
     assert await count(db_session, User, User.email == "paula.cordoba@andina.com.co") == 0
+
+
+async def test_created_client_is_visible_only_inside_its_tenant(client, admin, db_session):
+    """Comprueba la seguridad por filas: como wiseerp_app, el tenant nuevo solo se ve
+    declarando que se trabaja en él."""
+    data = (await client.post(URL, json=PAYLOAD, headers=admin)).json()["data"]
+    tenant_id = data["tenant_id"]
+
+    await db_session.execute(text("SET ROLE wiseerp_app"))
+    try:
+        for tenant_context, expected in (("", 0), (tenant_id, 1)):
+            await db_session.execute(
+                text("SELECT set_config('app.tenant_id', :t, true)"), {"t": tenant_context}
+            )
+            await db_session.execute(text("SELECT set_config('app.user_id', '', true)"))
+            visible = await db_session.scalar(
+                text("SELECT count(*) FROM public.tenants WHERE id = :id"), {"id": tenant_id}
+            )
+            assert visible == expected
+    finally:
+        await db_session.execute(text("RESET ROLE"))
+
+
+async def test_token_of_unknown_person_is_forbidden(client, firm):
+    headers = auth_headers(UUID("00000000-0000-0000-0000-000000000001"), firm)
+    assert (await client.post(URL, json=PAYLOAD, headers=headers)).status_code == 403

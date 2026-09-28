@@ -1,9 +1,12 @@
-"""inicial: usuarios, roles, identidades, clientes y notas en el schema exogena
+"""inicial: clientes (sobre public.tenants), responsabilidades, contactos y notas
 
 Revision ID: 0001_initial
 Revises:
-Create Date: 2026-09-28 12:00:00.000000
+Create Date: 2026-09-28 18:00:00.000000
 
+Las personas, organizaciones, roles y membresías son de la plataforma (schema public):
+esta migración no las crea, solo les apunta con FK. Crear esas FK exige el permiso
+REFERENCES sobre public.tenants, public.users y public.memberships.
 """
 
 from collections.abc import Sequence
@@ -19,14 +22,9 @@ depends_on: str | Sequence[str] | None = None
 
 # Escrito a mano (no DB_SCHEMA): una migración no debe cambiar si el código cambia después
 SCHEMA = "exogena"
+PLATFORM = "public"
 
-ROLES = [
-    ("admin", "Administrador", "Puede crear clientes y administrar usuarios"),
-    ("colaborador", "Colaborador", "Personal de la firma"),
-    ("usuario_cliente", "Usuario de cliente", "Persona de una empresa cliente"),
-]
-
-# Nombre separado como en los documentos colombianos (usuarios y clientes persona natural)
+# Nombre separado como en el RUT (clientes persona natural)
 NAME_COLUMNS = ("first_name", "middle_name", "last_name", "second_last_name")
 
 
@@ -60,100 +58,11 @@ def upgrade() -> None:
         "END IF; END $$"
     )
 
-    # ── users ──
-    op.create_table(
-        "users",
-        *_base_columns(),
-        sa.Column("email", sa.String(length=320), nullable=False),
-        sa.Column("first_name", sa.String(length=100), nullable=False),
-        sa.Column("middle_name", sa.String(length=100), nullable=True),
-        sa.Column("last_name", sa.String(length=100), nullable=False),
-        sa.Column("second_last_name", sa.String(length=100), nullable=True),
-        sa.Column("phone", sa.String(length=30), nullable=True),
-        sa.Column("can_login", sa.Boolean(), nullable=False),
-        sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True),
-        sa.CheckConstraint("email = lower(email)", name=op.f("ck_users_email_lowercase")),
-        sa.PrimaryKeyConstraint("id", name=op.f("pk_users")),
-        schema=SCHEMA,
-    )
-    _unique_active("ux_users_email", "users", ["email"])
-
-    # ── roles + roles iniciales ──
-    op.create_table(
-        "roles",
-        *_base_columns(),
-        sa.Column("code", sa.String(length=50), nullable=False),
-        sa.Column("name", sa.String(length=100), nullable=False),
-        sa.Column("description", sa.String(length=255), nullable=True),
-        sa.PrimaryKeyConstraint("id", name=op.f("pk_roles")),
-        sa.UniqueConstraint("code", name=op.f("uq_roles_code")),
-        schema=SCHEMA,
-    )
-    for code, name, description in ROLES:
-        op.execute(
-            sa.text(
-                f"INSERT INTO {SCHEMA}.roles "
-                "(id, is_deleted, is_active, created_at, code, name, description) "
-                "VALUES (gen_random_uuid(), false, true, now(), :code, :name, :description)"
-            ).bindparams(code=code, name=name, description=description)
-        )
-
-    # ── user_roles ──
-    op.create_table(
-        "user_roles",
-        *_base_columns(),
-        sa.Column("user_id", sa.Uuid(), nullable=False),
-        sa.Column("role_id", sa.Uuid(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["user_id"], [f"{SCHEMA}.users.id"], name=op.f("fk_user_roles_user_id_users")
-        ),
-        sa.ForeignKeyConstraint(
-            ["role_id"], [f"{SCHEMA}.roles.id"], name=op.f("fk_user_roles_role_id_roles")
-        ),
-        sa.PrimaryKeyConstraint("id", name=op.f("pk_user_roles")),
-        schema=SCHEMA,
-    )
-    op.create_index(
-        op.f("ix_exogena_user_roles_user_id"), "user_roles", ["user_id"], schema=SCHEMA
-    )
-    op.create_index(
-        op.f("ix_exogena_user_roles_role_id"), "user_roles", ["role_id"], schema=SCHEMA
-    )
-    _unique_active("ux_user_roles_user_role", "user_roles", ["user_id", "role_id"])
-
-    # ── user_identities ──
-    op.create_table(
-        "user_identities",
-        *_base_columns(),
-        sa.Column("user_id", sa.Uuid(), nullable=False),
-        sa.Column("provider", sa.String(length=20), nullable=False),
-        sa.Column("subject", sa.String(length=320), nullable=False),
-        sa.Column("password_hash", sa.String(), nullable=True),
-        sa.CheckConstraint(
-            "provider IN ('password', 'google', 'microsoft')",
-            name=op.f("ck_user_identities_provider_valid"),
-        ),
-        sa.CheckConstraint(
-            "(provider = 'password') = (password_hash IS NOT NULL)",
-            name=op.f("ck_user_identities_password_hash_only_for_password"),
-        ),
-        sa.ForeignKeyConstraint(
-            ["user_id"], [f"{SCHEMA}.users.id"], name=op.f("fk_user_identities_user_id_users")
-        ),
-        sa.PrimaryKeyConstraint("id", name=op.f("pk_user_identities")),
-        schema=SCHEMA,
-    )
-    op.create_index(
-        op.f("ix_exogena_user_identities_user_id"), "user_identities", ["user_id"], schema=SCHEMA
-    )
-    _unique_active(
-        "ux_user_identities_provider_subject", "user_identities", ["provider", "subject"]
-    )
-
-    # ── clients ──
+    # ── clients: datos del RUT de un tenant de la plataforma ──
     op.create_table(
         "clients",
         *_base_columns(),
+        sa.Column("tenant_id", sa.Uuid(), nullable=False),
         sa.Column("nit", sa.String(length=15), nullable=False),
         sa.Column("dv", sa.String(length=1), nullable=False),
         sa.Column("person_type", sa.String(length=10), nullable=False),
@@ -185,10 +94,14 @@ def upgrade() -> None:
             " OR (person_type = 'natural' AND first_name IS NOT NULL AND last_name IS NOT NULL)",
             name=op.f("ck_clients_name_matches_person_type"),
         ),
+        sa.ForeignKeyConstraint(
+            ["tenant_id"], [f"{PLATFORM}.tenants.id"], name=op.f("fk_clients_tenant_id_tenants")
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_clients")),
         schema=SCHEMA,
     )
     _unique_active("ux_clients_nit", "clients", ["nit"])
+    _unique_active("ux_clients_tenant_id", "clients", ["tenant_id"])
 
     # ── client_tax_responsibilities ──
     op.create_table(
@@ -219,33 +132,38 @@ def upgrade() -> None:
         ["client_id", "code"],
     )
 
-    # ── client_users ──
+    # ── client_contacts: cargo, teléfono y contacto principal de cada membresía ──
     op.create_table(
-        "client_users",
+        "client_contacts",
         *_base_columns(),
         sa.Column("client_id", sa.Uuid(), nullable=False),
-        sa.Column("user_id", sa.Uuid(), nullable=False),
+        sa.Column("membership_id", sa.Uuid(), nullable=False),
         sa.Column("position", sa.String(length=100), nullable=True),
+        sa.Column("phone", sa.String(length=30), nullable=True),
         sa.Column("is_primary_contact", sa.Boolean(), nullable=False),
         sa.ForeignKeyConstraint(
-            ["client_id"], [f"{SCHEMA}.clients.id"], name=op.f("fk_client_users_client_id_clients")
+            ["client_id"],
+            [f"{SCHEMA}.clients.id"],
+            name=op.f("fk_client_contacts_client_id_clients"),
         ),
         sa.ForeignKeyConstraint(
-            ["user_id"], [f"{SCHEMA}.users.id"], name=op.f("fk_client_users_user_id_users")
+            ["membership_id"],
+            [f"{PLATFORM}.memberships.id"],
+            name=op.f("fk_client_contacts_membership_id_memberships"),
         ),
-        sa.PrimaryKeyConstraint("id", name=op.f("pk_client_users")),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_client_contacts")),
         schema=SCHEMA,
     )
     op.create_index(
-        op.f("ix_exogena_client_users_client_id"), "client_users", ["client_id"], schema=SCHEMA
+        op.f("ix_exogena_client_contacts_client_id"),
+        "client_contacts",
+        ["client_id"],
+        schema=SCHEMA,
     )
-    op.create_index(
-        op.f("ix_exogena_client_users_user_id"), "client_users", ["user_id"], schema=SCHEMA
-    )
-    _unique_active("ux_client_users_client_user", "client_users", ["client_id", "user_id"])
+    _unique_active("ux_client_contacts_membership_id", "client_contacts", ["membership_id"])
     _unique_active(
-        "ux_client_users_primary_contact",
-        "client_users",
+        "ux_client_contacts_primary_contact",
+        "client_contacts",
         ["client_id"],
         where="is_primary_contact AND NOT is_deleted",
     )
@@ -257,23 +175,38 @@ def upgrade() -> None:
         sa.Column("title", sa.String(length=200), nullable=False),
         sa.Column("content", sa.String(), nullable=False),
         sa.Column("user_id", sa.Uuid(), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["user_id"], [f"{PLATFORM}.users.id"], name=op.f("fk_notes_user_id_users")
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_notes")),
         schema=SCHEMA,
     )
     op.create_index(op.f("ix_exogena_notes_title"), "notes", ["title"], schema=SCHEMA)
     op.create_index(op.f("ix_exogena_notes_user_id"), "notes", ["user_id"], schema=SCHEMA)
 
+    # ── Permisos: la app corre como wiseerp_app (y wiseerp_ro solo lee), igual que en public.
+    # Las tablas de futuras migraciones reciben los mismos permisos (DEFAULT PRIVILEGES).
+    op.execute(
+        f"""
+        DO $$ BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'wiseerp_app') THEN
+                GRANT USAGE ON SCHEMA "{SCHEMA}" TO wiseerp_app;
+                GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "{SCHEMA}"
+                    TO wiseerp_app;
+                ALTER DEFAULT PRIVILEGES IN SCHEMA "{SCHEMA}"
+                    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO wiseerp_app;
+            END IF;
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'wiseerp_ro') THEN
+                GRANT USAGE ON SCHEMA "{SCHEMA}" TO wiseerp_ro;
+                GRANT SELECT ON ALL TABLES IN SCHEMA "{SCHEMA}" TO wiseerp_ro;
+                ALTER DEFAULT PRIVILEGES IN SCHEMA "{SCHEMA}" GRANT SELECT ON TABLES TO wiseerp_ro;
+            END IF;
+        END $$
+        """
+    )
+
 
 def downgrade() -> None:
-    for table in (
-        "notes",
-        "client_users",
-        "client_tax_responsibilities",
-        "clients",
-        "user_identities",
-        "user_roles",
-        "roles",
-        "users",
-    ):
+    for table in ("notes", "client_contacts", "client_tax_responsibilities", "clients"):
         op.drop_table(table, schema=SCHEMA)
     # El schema no se borra: en AWS lo crea un administrador y habría que pedirlo de nuevo

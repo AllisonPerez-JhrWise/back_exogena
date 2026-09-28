@@ -29,7 +29,9 @@ app/
 │   ├── health.py           # /health (liveness), /health/ready (DB check)
 │   └── v1.py               # Registers every module router under /api/v1
 └── modules/
-    ├── accounts/           # Users + auth (email/password, Google OAuth)
+    ├── platform/           # Read-only models of the platform tables (public) + permissions
+    ├── clients/            # Client registration on top of the platform tenants
+    ├── catalog/            # Obligations, service types and services (to create engagements)
     └── notes/              # EXAMPLE module: copy it as a template, then delete it
         ├── models.py       # Tables (all in the "exogena" schema)
         ├── schemas.py      # Request/response Pydantic models
@@ -50,7 +52,7 @@ app/
 
 - Services raise domain errors from `app.core.exceptions`; `core/handlers.py` turns them into HTTP responses.
 - Dependencies are injected per request (`Depends(get_note_service)`), so tests can swap any service for a fake.
-- Modules do not import each other's internals. Cross-module references are plain UUIDs (no FK), which keeps each module splittable into its own service.
+- Modules do not import each other's internals. Tables of this service use real FKs between them and to the platform tables (same database).
 - Every table gets `id`, `is_deleted`, `is_active`, `created_at`, `updated_at`, `created_by`, `updated_by`, and lives in the single PostgreSQL schema `exogena` (`DB_SCHEMA` in `app/shared/models.py`). Modules split the code, not the database.
 
 ### API contract (for the Next.js front)
@@ -71,10 +73,15 @@ app/
 
 ### Authentication
 
-- `POST /api/v1/auth/login` returns the user and sets an `HttpOnly` cookie `access_token`. The token is also in the body for a **Next.js BFF** (Route Handlers / Server Actions calling this API with `Authorization: Bearer`).
-- Protected endpoints accept the cookie **or** the Bearer header.
-- `PrincipalDep` only validates the JWT (no DB hit). Use `ActiveUserDep` from `accounts` when you need the full, active user row.
-- Recommended setup: Next.js server → API inside the VPC (BFF). If the browser calls the API directly, use same-site subdomains (`app.` / `api.`), `COOKIE_DOMAIN`, `COOKIE_SECURE=true` and the exact origin in `CORS_ORIGINS`.
+- Login is **not** part of this service: the platform handles it with AWS Cognito. This service only validates `Authorization: Bearer <token>`. Until the Cognito settings are available, tokens are provisional HS256 tokens signed with `JWT_SECRET` (`app/core/security.py`).
+- `PrincipalDep` only validates the token (no DB hit).
+- The front sends the tenant it works in with `X-Tenant-Id`. `require_permission(...)` (`app/modules/platform/dependencies.py`) checks the permission through the platform memberships and sets the row-level security context (`app.user_id`, `app.tenant_id`) for the rest of the request.
+
+### Platform tables
+
+- `users`, `tenants`, `roles`, `memberships`, `membership_roles`, `permissions`… live in `public` and belong to the platform service (its own Alembic). They have row-level security.
+- `app/modules/platform/models.py` describes them so we can query them and point FKs at them; `alembic/env.py` excludes them from our migrations.
+- Creating tenants and users goes through the platform functions (`app_crear_organizacion`, `app_crear_usuario`), which only `wiseerp_app` can run. The app connects as `wiseerp_app` (`DATABASE_URL`); migrations run as the owner of `exogena` (`MIGRATION_DATABASE_URL`).
 
 ## Adding a new module
 

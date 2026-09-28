@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import CheckConstraint, Index, text
 from sqlmodel import Field
 
+from app.modules.platform.models import platform_fk
 from app.shared.models import DB_SCHEMA, BaseTable, join_name_parts
 
 
@@ -24,13 +25,21 @@ class RutStatus(StrEnum):
 
 
 class Client(BaseTable):
-    """El cliente: una persona jurídica (empresa) o natural. Los datos del RUT no son
-    editables; `trade_name` sí."""
+    """Datos del RUT de un cliente. El cliente en sí es un tenant de la plataforma
+    (public.tenants, kind='client'): esta tabla lo complementa, 1 a 1.
+    Los datos del RUT no son editables; `trade_name` sí."""
 
     __tablename__ = "clients"
     __table_args__ = (
         # NIT único solo entre clientes no borrados (borrado lógico)
         Index("ux_clients_nit", "nit", unique=True, postgresql_where=text("NOT is_deleted")),
+        # Un tenant tiene un solo registro de cliente
+        Index(
+            "ux_clients_tenant_id",
+            "tenant_id",
+            unique=True,
+            postgresql_where=text("NOT is_deleted"),
+        ),
         CheckConstraint("nit ~ '^[0-9]{5,15}$'", name="nit_digits"),
         CheckConstraint("dv ~ '^[0-9]$'", name="dv_digit"),
         CheckConstraint("person_type IN ('natural', 'juridica')", name="person_type_valid"),
@@ -44,6 +53,8 @@ class Client(BaseTable):
             name="name_matches_person_type",
         ),
     )
+
+    tenant_id: UUID = Field(foreign_key=platform_fk("tenants"))
 
     # ── Datos del RUT (no editables) ──
     nit: str = Field(max_length=15, description="NIT sin dígito de verificación")
@@ -99,23 +110,25 @@ class ClientTaxResponsibility(BaseTable):
     code: str = Field(max_length=2)
 
 
-class ClientUser(BaseTable):
-    """Une usuarios con clientes. El cargo va aquí porque una persona (p. ej. un revisor
-    fiscal) puede estar en varios clientes con un cargo distinto en cada uno."""
+class ClientContact(BaseTable):
+    """Datos de una persona dentro de un cliente que la plataforma no guarda: su cargo, su
+    teléfono de contacto y si es el contacto principal. La persona y su acceso al cliente
+    son la membresía (public.memberships); esta tabla la complementa, 1 a 1.
+    El cargo va aquí porque una persona (p. ej. un revisor fiscal) puede estar en varios
+    clientes con un cargo distinto en cada uno."""
 
-    __tablename__ = "client_users"
+    __tablename__ = "client_contacts"
     __table_args__ = (
-        # Un usuario no se repite en el mismo cliente
+        # Una membresía tiene un solo registro de contacto
         Index(
-            "ux_client_users_client_user",
-            "client_id",
-            "user_id",
+            "ux_client_contacts_membership_id",
+            "membership_id",
             unique=True,
             postgresql_where=text("NOT is_deleted"),
         ),
         # Cada cliente tiene un solo contacto principal
         Index(
-            "ux_client_users_primary_contact",
+            "ux_client_contacts_primary_contact",
             "client_id",
             unique=True,
             postgresql_where=text("is_primary_contact AND NOT is_deleted"),
@@ -123,6 +136,7 @@ class ClientUser(BaseTable):
     )
 
     client_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.clients.id", index=True)
-    user_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.users.id", index=True)
+    membership_id: UUID = Field(foreign_key=platform_fk("memberships"))
     position: str | None = Field(default=None, max_length=100, description="Cargo en la empresa")
+    phone: str | None = Field(default=None, max_length=30)
     is_primary_contact: bool = Field(default=False)

@@ -4,9 +4,9 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr, Field, StringConstraints, model_validator
 
-from app.modules.accounts.schemas import NewUserData
 from app.modules.clients.models import PersonType, RutStatus
 from app.modules.clients.nit import calculate_dv
+from app.shared.models import join_name_parts
 
 ResponsibilityCode = Annotated[str, StringConstraints(pattern=r"^[0-9]{1,2}$")]
 
@@ -60,11 +60,24 @@ class ClientOrganizationIn(BaseModel):
     trade_name: str | None = Field(default=None, max_length=250)
 
 
-class ClientUserIn(NewUserData):
-    """Un usuario del cliente (paso 4). El contacto principal viene del paso 2."""
+class ClientUserIn(BaseModel):
+    """Una persona del cliente (paso 4). El contacto principal viene del paso 2."""
 
+    email: EmailStr
+    # La plataforma guarda un solo campo full_name; se arma con estas partes
+    first_name: str = Field(min_length=1, max_length=100)
+    middle_name: str | None = Field(default=None, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    second_last_name: str | None = Field(default=None, max_length=100)
+    phone: str | None = Field(default=None, max_length=30)
     position: str | None = Field(default=None, max_length=100, description="Cargo en la empresa")
     is_primary_contact: bool = False
+
+    @property
+    def full_name(self) -> str:
+        return join_name_parts(
+            self.first_name, self.middle_name, self.last_name, self.second_last_name
+        )
 
 
 class ClientCreate(BaseModel):
@@ -72,16 +85,21 @@ class ClientCreate(BaseModel):
 
     rut: ClientRutIn
     organization: ClientOrganizationIn = Field(default_factory=ClientOrganizationIn)
-    users: list[ClientUserIn] = Field(default_factory=list)
+    users: list[ClientUserIn] = Field(min_length=1)
 
     @model_validator(mode="after")
     def _check_users(self) -> "ClientCreate":
         emails = [user.email.lower() for user in self.users]
         if len(set(emails)) != len(emails):
             raise ValueError("users has repeated emails")
-        if sum(user.is_primary_contact for user in self.users) > 1:
-            raise ValueError("Only one user can be the primary contact")
+        # La plataforma crea el tenant con su administrador: el contacto principal
+        if sum(user.is_primary_contact for user in self.users) != 1:
+            raise ValueError("Exactly one user must be the primary contact")
         return self
+
+    @property
+    def primary_contact(self) -> ClientUserIn:
+        return next(user for user in self.users if user.is_primary_contact)
 
 
 # ── Salida ───────────────────────────────────────────────────────────────────
@@ -89,8 +107,10 @@ class ClientCreate(BaseModel):
 
 class ClientUserRead(BaseModel):
     user_id: UUID
+    membership_id: UUID
     email: EmailStr
     full_name: str
+    role: str = Field(description="Rol en el tenant del cliente")
     phone: str | None = None
     position: str | None = None
     is_primary_contact: bool
@@ -98,6 +118,7 @@ class ClientUserRead(BaseModel):
 
 class ClientRead(BaseModel):
     id: UUID
+    tenant_id: UUID = Field(description="El cliente en la plataforma (public.tenants)")
     nit: str
     dv: str
     person_type: PersonType

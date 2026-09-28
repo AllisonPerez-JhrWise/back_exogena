@@ -1,6 +1,21 @@
-async def test_notes_crud_is_scoped_to_owner(client, register):
-    alice = await register("alice@example.com")
-    bob = await register("bob@example.com")
+import pytest
+
+from tests.integration.conftest import auth_headers
+
+
+@pytest.fixture
+def person(platform):
+    """Crea una persona en la plataforma y devuelve sus encabezados."""
+
+    async def _person(email: str) -> dict[str, str]:
+        return auth_headers(await platform.user(email))
+
+    return _person
+
+
+async def test_notes_crud_is_scoped_to_owner(client, person):
+    alice = await person("alice@example.com")
+    bob = await person("bob@example.com")
 
     created = await client.post(
         "/api/v1/notes", json={"title": "Plan", "content": "v1"}, headers=alice
@@ -30,8 +45,8 @@ async def test_notes_crud_is_scoped_to_owner(client, register):
     assert (await client.get(url, headers=alice)).status_code == 404
 
 
-async def test_sorting(client, register):
-    alice = await register("sorter@example.com")
+async def test_sorting(client, person):
+    alice = await person("sorter@example.com")
     for title in ("b", "a", "c"):
         await client.post("/api/v1/notes", json={"title": title, "content": "x"}, headers=alice)
 

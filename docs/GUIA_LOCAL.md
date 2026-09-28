@@ -20,8 +20,14 @@ corre dentro de Docker.
 En este proyecto se encienden **dos cajas**:
 
 - **`back-exogena-app`**: el backend (FastAPI) en http://localhost:8000
-- **`back-exogena-db`**: un PostgreSQL **local** para desarrollar. No es la base de datos
-  de AWS; es una copia vacía en tu computador para probar sin riesgo.
+- **`back-exogena-db`**: un PostgreSQL 18 **local** para desarrollar. No es la base de datos
+  de AWS, pero tiene su misma forma: los roles (`wiseerp_app`, `wiseerp_rw`...), las tablas
+  de la plataforma en `public` (tenants, users, roles, memberships...) con su seguridad por
+  filas, y los catálogos de roles y permisos. No tiene datos de clientes ni de usuarios reales.
+  - Todo sale de los scripts de [docker/db-init](../docker/db-init), que Postgres ejecuta al
+    crear la base. La app se conecta como `exogena_dev`, que equivale al usuario de AWS.
+  - Si la plataforma cambia en AWS: `make db-sync-cloud` (solo lectura, necesita `.env.aws`)
+    y luego `make reset`.
 
 ---
 
@@ -174,6 +180,6 @@ con un texto aleatorio de mínimo 32 caracteres.)
 
 ## 7. Qué NO hace este entorno
 
-- **No se conecta a la base de datos de AWS (RDS).** Usa un PostgreSQL local. La conexión a
-  AWS se configura en el despliegue, con los secretos en AWS Secrets Manager.
+- **No se conecta a la base de datos de AWS (RDS).** Usa un PostgreSQL local. Solo los
+  comandos `make aws-*` y `make db-sync-cloud` usan AWS, y únicamente con tu `.env.aws`.
 - **No sube nada a GitHub.** Los commits y pushes se hacen aparte, con git.

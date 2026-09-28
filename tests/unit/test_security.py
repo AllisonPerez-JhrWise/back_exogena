@@ -3,23 +3,7 @@ from datetime import timedelta
 import pytest
 
 from app.core.exceptions import UnauthorizedError
-from app.core.security import (
-    create_access_token,
-    decode_access_token,
-    hash_password,
-    verify_password,
-)
-
-
-def test_password_hash_roundtrip():
-    hashed = hash_password("s3cret-pass")
-    assert hashed.startswith("$argon2")
-    assert verify_password("s3cret-pass", hashed)
-    assert not verify_password("wrong", hashed)
-
-
-def test_verify_without_hash_is_false():
-    assert verify_password("anything", None) is False
+from app.core.security import create_access_token, decode_access_token
 
 
 def test_token_roundtrip_keeps_claims():

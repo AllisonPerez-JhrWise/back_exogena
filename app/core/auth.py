@@ -1,19 +1,17 @@
 """¿Quién está haciendo la petición?
 
-Solo valida el JWT, no consulta la base de datos. Así cada módulo es independiente
-de dónde vivan los usuarios (este servicio, otro microservicio o un proveedor de
-identidad). Los módulos que necesiten el registro completo del usuario usan su
-propia dependencia (ver `app.modules.accounts.dependencies.get_active_user`).
+Solo valida el token (Authorization: Bearer), no consulta la base de datos. El login no
+es de este servicio: lo hace la plataforma con Cognito. Los permisos dentro de un tenant
+se revisan en app.modules.platform.dependencies.
 """
 
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Request
+from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ValidationError
 
-from app.core.config import settings
 from app.core.exceptions import UnauthorizedError
 from app.core.security import decode_access_token
 
@@ -21,23 +19,19 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 class Principal(BaseModel):
+    # id de public.users. Con Cognito, el token trae el cognito_sub y se traduce con
+    # la función app_usuario_por_sub de la plataforma.
     id: UUID
     email: str | None = None
 
 
 async def get_current_principal(
-    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> Principal:
-    """Toma el token de `Authorization: Bearer` (BFF / servicios)
-    o de la cookie HttpOnly (navegador)."""
-    token = (
-        credentials.credentials if credentials else request.cookies.get(settings.auth_cookie_name)
-    )
-    if not token:
+    if not credentials:
         raise UnauthorizedError()
 
-    claims = decode_access_token(token)
+    claims = decode_access_token(credentials.credentials)
     try:
         return Principal(id=claims["sub"], email=claims.get("email"))
     except ValidationError:

@@ -1,13 +1,16 @@
 # Ejecución aislada de tests: `make test`. No necesita ningún archivo .env.
 services:
   db_test:
-    image: postgres:15
+    image: postgres:18
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: exogena_test
     tmpfs:
-      - /var/lib/postgresql/data
+      - /var/lib/postgresql
+    # Igual que la base local: roles, estructura de la plataforma y catálogos de la nube
+    volumes:
+      - ./docker/db-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d exogena_test"]
       interval: 3s
