@@ -67,7 +67,13 @@ def register(client):
 
     async def _register(email: str, password: str = "password-123") -> dict:
         response = await client.post(
-            "/api/v1/auth/register", json={"email": email, "password": password}
+            "/api/v1/auth/register",
+            json={
+                "email": email,
+                "password": password,
+                "first_name": "Test",
+                "last_name": "Prueba",
+            },
         )
         assert response.status_code == 201, response.text
         token = response.json()["data"]["access_token"]
