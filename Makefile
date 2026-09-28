@@ -31,7 +31,7 @@ COMPOSE_TEST := docker compose -f docker-compose.test.yml
 # en Windows, make le pasa cada comando a sh con la codificacion antigua y se dañan.
 
 .PHONY: help up down restart status logs shell psql reset migrate migration db-check \
-        test venv test-unit lint format clean check-docker
+        aws-status aws-sql aws-migrate test venv test-unit lint format clean check-docker
 
 help: ## Muestra los comandos disponibles
 	@printf "\n$(BOLD)Comandos disponibles$(RESET)  (uso: make <comando>)\n"
@@ -90,6 +90,28 @@ migration: ## Crea una migración nueva. Uso: make migration m="agregar terceros
 db-check: ## Verifica que los modelos y las migraciones coincidan
 	docker compose exec app alembic check
 
+##@ AWS (usa .env.aws)
+
+# Misma imagen de la app, pero con la conexión de .env.aws. MSYS_NO_PATHCONV evita que
+# Git Bash en Windows convierta /app en una ruta de Windows.
+AWS_ALEMBIC := MSYS_NO_PATHCONV=1 docker run --rm --env-file .env.aws \
+  -v "$(CURDIR):/app" -w /app back-exogena alembic
+
+aws-status: check-docker .env.aws ## Solo lectura: qué migración tiene la base de AWS
+	$(AWS_ALEMBIC) current
+
+aws-sql: check-docker .env.aws ## Solo lectura: muestra el SQL que se ejecutaría en AWS
+	$(AWS_ALEMBIC) upgrade head --sql
+
+aws-migrate: check-docker .env.aws ## ⚠ Aplica las migraciones en la base de AWS (pide confirmación)
+	@printf "$(RED)Esto modifica la base de datos de AWS.$(RESET) Continuar? [s/N] "; \
+	  read ans; ans=$$(printf '%s' "$$ans" | tr -cd 'a-zA-Z'); \
+	  if [ "$$ans" = "s" ] || [ "$$ans" = "S" ]; then \
+	    $(AWS_ALEMBIC) upgrade head; \
+	  else \
+	    echo "Cancelado. No se aplico nada."; \
+	  fi
+
 ##@ Pruebas y calidad
 
 test: check-docker ## Corre TODAS las pruebas en Docker, con una base desechable
@@ -130,3 +152,9 @@ check-docker:
 	@secret=$$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n') && \
 	  sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$$secret/" .env
 	@printf "$(GREEN)OK - Se creo .env con un JWT_SECRET nuevo$(RESET) (no se sube a git)\n"
+
+# Los comandos aws-* necesitan .env.aws con la conexión a RDS (no se sube a git)
+.env.aws:
+	@printf "$(RED)ERROR - Falta el archivo .env.aws.$(RESET) Crealo con DATABASE_URL (postgresql+asyncpg://...),\n"
+	@printf "DB_SSL_MODE=require, ENVIRONMENT=production, COOKIE_SECURE=true y JWT_SECRET.\n"
+	@exit 1

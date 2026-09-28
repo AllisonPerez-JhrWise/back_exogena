@@ -43,7 +43,6 @@ class UserRead(BaseModel):
     # Armado a partir de las partes (propiedad del modelo), listo para mostrar
     full_name: str
     phone: str | None = None
-    avatar_url: str | None = None
     is_active: bool
     created_at: datetime
 
@@ -62,4 +61,3 @@ class GoogleUser(BaseModel):
     name: str | None = None
     given_name: str | None = None
     family_name: str | None = None
-    picture: str | None = None

@@ -51,7 +51,14 @@ def _unique_active(name: str, table: str, columns: list[str], where: str = "NOT 
 
 
 def upgrade() -> None:
-    op.execute(f'CREATE SCHEMA IF NOT EXISTS "{SCHEMA}"')
+    # Solo si no existe: en AWS lo crea un administrador y el usuario de la migración no tiene
+    # permiso CREATE sobre la base. Postgres revisa ese permiso incluso con IF NOT EXISTS.
+    op.execute(
+        "DO $$ BEGIN "
+        f"IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = '{SCHEMA}') "
+        f'THEN CREATE SCHEMA "{SCHEMA}"; '
+        "END IF; END $$"
+    )
 
     # ── users ──
     op.create_table(
@@ -63,7 +70,6 @@ def upgrade() -> None:
         sa.Column("last_name", sa.String(length=100), nullable=False),
         sa.Column("second_last_name", sa.String(length=100), nullable=True),
         sa.Column("phone", sa.String(length=30), nullable=True),
-        sa.Column("avatar_url", sa.String(), nullable=True),
         sa.Column("can_login", sa.Boolean(), nullable=False),
         sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint("email = lower(email)", name=op.f("ck_users_email_lowercase")),
@@ -270,4 +276,4 @@ def downgrade() -> None:
         "users",
     ):
         op.drop_table(table, schema=SCHEMA)
-    op.execute(f'DROP SCHEMA IF EXISTS "{SCHEMA}"')
+    # El schema no se borra: en AWS lo crea un administrador y habría que pedirlo de nuevo
