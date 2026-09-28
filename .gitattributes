@@ -1,0 +1,21 @@
+# Saltos de línea: todos los archivos de texto usan LF (formato Linux), en el repositorio
+# y en la carpeta de cada persona, sin importar su sistema operativo ni su configuración
+# de git. El código corre en contenedores Linux y los atajos del Makefile usan `sh`,
+# que falla con los CRLF de Windows. VS Code trabaja con LF sin problema.
+* text=auto eol=lf
+
+# Scripts propios de Windows sí necesitan CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Archivos binarios: git no debe tocarlos
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.xlsx binary
+*.docx binary
+*.zip binary

@@ -1,0 +1,35 @@
+# Ejecución aislada de tests: `make test`. No necesita ningún archivo .env.
+services:
+  db_test:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: exogena_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d exogena_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  app_test:
+    build: .
+    image: back-exogena
+    user: root
+    working_dir: /app
+    volumes:
+      - type: bind
+        source: .
+        target: /app
+    environment:
+      ENVIRONMENT: test
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db_test:5432/exogena_test
+      JWT_SECRET: test-secret-test-secret-test-secret-000
+    depends_on:
+      db_test:
+        condition: service_healthy
+    command: >
+      sh -c "pip install -q -r requirements/test.txt &&
+             pytest -v --tb=short"

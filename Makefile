@@ -1,0 +1,132 @@
+# ════════════════════════════════════════════════════════════════════════
+#  Atajos del proyecto. Escribe `make` (o `make help`) para ver la lista.
+#  Funciona desde PowerShell o Git Bash (ver docs/GUIA_LOCAL.md).
+# ════════════════════════════════════════════════════════════════════════
+
+.DEFAULT_GOAL := help
+
+YELLOW := \033[1;33m
+GREEN  := \033[1;32m
+RED    := \033[1;31m
+BOLD   := \033[1m
+RESET  := \033[0m
+
+# Rutas del entorno virtual de Python: cambian entre Windows y Linux/macOS
+ifeq ($(OS),Windows_NT)
+  VENV_BIN := .venv/Scripts
+  PYTHON   := py
+  # Los atajos usan comandos de Linux (sh, sed, cp…). Git para Windows los trae en
+  # <Git>/usr/bin: se agregan al PATH para que make funcione también desde PowerShell.
+  GIT_USR_BIN := $(subst /mingw64/libexec/git-core,/usr/bin,$(shell git --exec-path))
+  export PATH := $(GIT_USR_BIN);$(PATH)
+  SHELL := sh.exe
+else
+  VENV_BIN := .venv/bin
+  PYTHON   := python3
+endif
+
+COMPOSE_TEST := docker compose -f docker-compose.test.yml
+
+# OJO: los mensajes que imprimen los comandos (printf) van sin tildes ni simbolos:
+# en Windows, make le pasa cada comando a sh con la codificacion antigua y se dañan.
+
+.PHONY: help up down restart status logs shell psql reset migrate migration db-check \
+        test venv test-unit lint format clean check-docker
+
+help: ## Muestra los comandos disponibles
+	@printf "\n$(BOLD)Comandos disponibles$(RESET)  (uso: make <comando>)\n"
+	@awk 'BEGIN {FS = ":.*?## "} \
+	  /^##@ / {sub(/^##@ /, ""); printf "\n$(YELLOW)%s$(RESET)\n", $$0; next} \
+	  /^[a-zA-Z_-]+:.*?## / {printf "  $(GREEN)%-12s$(RESET) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@printf "\n"
+
+##@ Día a día
+
+up: check-docker .env ## Enciende TODO: app + base de datos + migraciones
+	docker compose up -d --build --wait
+	docker compose exec app alembic upgrade head
+	@printf "\n$(GREEN)OK - Todo encendido y listo$(RESET)\n"
+	@printf "  API:           http://localhost:8000\n"
+	@printf "  Documentacion: http://localhost:8000/docs\n"
+	@printf "  Ver logs:      make logs      Apagar: make down\n\n"
+
+down: ## Apaga todo (los datos de la base local se conservan)
+	docker compose down
+
+restart: ## Reinicia la app (si un cambio de código no se reflejó)
+	docker compose restart app
+
+status: ## Muestra qué está encendido
+	docker compose ps
+
+logs: ## Muestra los logs de la app en vivo (Ctrl+C para salir)
+	docker compose logs -f app
+
+shell: ## Abre una terminal dentro del contenedor de la app
+	docker compose exec app bash
+
+psql: ## Abre la consola SQL de la base de datos local
+	docker compose exec db sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
+
+reset: check-docker ## ⚠ Borra la base de datos LOCAL y enciende todo de cero
+	@printf "$(RED)Esto borra todos los datos de la base de datos local.$(RESET) Continuar? [s/N] "; \
+	  read ans; ans=$$(printf '%s' "$$ans" | tr -cd 'a-zA-Z'); \
+	  if [ "$$ans" = "s" ] || [ "$$ans" = "S" ]; then \
+	    docker compose down -v && "$(MAKE)" --no-print-directory up; \
+	  else \
+	    echo "Cancelado. No se borro nada."; \
+	  fi
+
+##@ Base de datos
+
+migrate: ## Aplica las migraciones pendientes
+	docker compose exec app alembic upgrade head
+
+migration: ## Crea una migración nueva. Uso: make migration m="agregar terceros"
+	@if [ -z "$(m)" ]; then printf "$(YELLOW)Uso: make migration m=\"descripcion\"$(RESET)\n"; exit 1; fi
+	docker compose exec app alembic revision --autogenerate -m "$(m)"
+	@printf "$(YELLOW)Revisa el archivo creado en alembic/versions/ y luego ejecuta: make migrate$(RESET)\n"
+
+db-check: ## Verifica que los modelos y las migraciones coincidan
+	docker compose exec app alembic check
+
+##@ Pruebas y calidad
+
+test: check-docker ## Corre TODAS las pruebas en Docker, con una base desechable
+	$(COMPOSE_TEST) run --rm --build app_test; \
+	  status=$$?; $(COMPOSE_TEST) down -v; exit $$status
+
+venv: ## Crea el entorno de Python local (.venv) para el editor, ruff y pytest
+	$(PYTHON) -m venv .venv
+	$(VENV_BIN)/python -m pip install --upgrade pip
+	$(VENV_BIN)/pip install -r requirements/dev.txt -r requirements/test.txt
+	$(VENV_BIN)/pre-commit install
+
+test-unit: ## Pruebas unitarias con el .venv local (no necesita Docker)
+	$(VENV_BIN)/pytest -m "not integration"
+
+lint: ## Revisa el estilo del código con ruff
+	$(VENV_BIN)/ruff check .
+	$(VENV_BIN)/ruff format --check .
+
+format: ## Formatea y corrige el estilo automáticamente
+	$(VENV_BIN)/ruff check --fix .
+	$(VENV_BIN)/ruff format .
+
+clean: ## Borra archivos temporales (cachés de Python)
+	find . -type d \( -name "__pycache__" -o -name ".pytest_cache" -o -name ".ruff_cache" \) -prune -exec rm -rf {} +
+
+# ── Pasos internos (no aparecen en la ayuda) ─────────────────────────────
+
+# Falla con un mensaje claro si Docker Desktop no está encendido
+check-docker:
+	@docker info >/dev/null 2>&1 || { \
+	  printf "$(RED)ERROR - Docker no esta encendido.$(RESET) Abre Docker Desktop y espera a que diga 'Engine running'.\n"; \
+	  exit 1; }
+
+# Crea el .env la primera vez, con un JWT_SECRET aleatorio (solo si no existe)
+.env:
+	@cp .env_example .env
+	@secret=$$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n') && \
+	  sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$$secret/" .env
+	@printf "$(GREEN)OK - Se creo .env con un JWT_SECRET nuevo$(RESET) (no se sube a git)\n"

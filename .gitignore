@@ -1,0 +1,114 @@
+# ──────────────────────────────────────────────
+#  Python
+# ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+.eggs/
+wheels/
+
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+.pyre/
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+nosetests.xml
+junit.xml
+
+# ──────────────────────────────────────────────
+#  Virtual environments
+# ──────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.virtualenv/
+
+# ──────────────────────────────────────────────
+#  Environment / secrets
+# ──────────────────────────────────────────────
+.env
+.env.*
+!.env_example
+
+# ──────────────────────────────────────────────
+#  Docker
+# ──────────────────────────────────────────────
+# Keep docker-compose.yml and Dockerfile tracked.
+# Ignore generated / override files.
+docker-compose.override.yml
+docker-compose.local.yml
+
+# ──────────────────────────────────────────────
+#  Alembic
+# ──────────────────────────────────────────────
+# Keep alembic.ini and the migrations folder tracked.
+# Ignore any local overrides.
+alembic.local.ini
+
+# ──────────────────────────────────────────────
+#  IDEs & editors
+# ──────────────────────────────────────────────
+# VS Code
+.vscode/
+!.vscode/extensions.json
+
+# JetBrains (PyCharm, etc.)
+.idea/
+
+# Vim / Emacs
+*.swp
+*.swo
+*~
+\#*\#
+.\#*
+
+# ──────────────────────────────────────────────
+#  OS artefacts
+# ──────────────────────────────────────────────
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# ──────────────────────────────────────────────
+#  Logs & databases
+# ──────────────────────────────────────────────
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# ──────────────────────────────────────────────
+#  Misc
+# ──────────────────────────────────────────────
+*.bak
+*.tmp
+*.orig
