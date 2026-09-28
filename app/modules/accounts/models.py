@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import CheckConstraint, Index, text
 from sqlmodel import DateTime, Field
 
-from app.shared.models import BaseTable, join_name_parts
+from app.shared.models import DB_SCHEMA, BaseTable, join_name_parts
 
 
 class RoleCode(StrEnum):
@@ -80,8 +80,8 @@ class UserRole(BaseTable):
         ),
     )
 
-    user_id: UUID = Field(foreign_key="accounts.users.id", index=True)
-    role_id: UUID = Field(foreign_key="accounts.roles.id", index=True)
+    user_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.users.id", index=True)
+    role_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.roles.id", index=True)
 
 
 class UserIdentity(BaseTable):
@@ -106,7 +106,7 @@ class UserIdentity(BaseTable):
         ),
     )
 
-    user_id: UUID = Field(foreign_key="accounts.users.id", index=True)
+    user_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.users.id", index=True)
     provider: str = Field(max_length=20)
     subject: str = Field(max_length=320)
     password_hash: str | None = None

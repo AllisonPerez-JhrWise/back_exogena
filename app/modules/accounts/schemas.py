@@ -18,6 +18,17 @@ class RegisterRequest(BaseModel):
     second_last_name: str | None = Field(default=None, max_length=100)
 
 
+class NewUserData(BaseModel):
+    """Datos para crear un usuario que todavía no entra al sistema (p. ej. usuario de cliente)."""
+
+    email: EmailStr
+    first_name: str = Field(min_length=1, max_length=100)
+    middle_name: str | None = Field(default=None, max_length=100)
+    last_name: str = Field(min_length=1, max_length=100)
+    second_last_name: str | None = Field(default=None, max_length=100)
+    phone: str | None = Field(default=None, max_length=30)
+
+
 class UserRead(BaseModel):
     """Representación pública del usuario. Nunca agregar contraseñas ni identidades aquí."""
 

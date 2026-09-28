@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import CheckConstraint, Index, text
 from sqlmodel import Field
 
-from app.shared.models import BaseTable, join_name_parts
+from app.shared.models import DB_SCHEMA, BaseTable, join_name_parts
 
 
 class PersonType(StrEnum):
@@ -16,7 +16,7 @@ class PersonType(StrEnum):
 
 
 class RutStatus(StrEnum):
-    """Estado del RUT. Se confirma la lista completa cuando se implemente la validación del RUT."""
+    """Estado del RUT. La lista se ajusta a los valores que entregue el microservicio del RUT."""
 
     ACTIVO = "activo"
     SUSPENDIDO = "suspendido"
@@ -64,7 +64,7 @@ class Client(BaseTable):
     main_activity_code: str | None = Field(default=None, max_length=4, description="Código CIIU")
     rut_status: str | None = Field(default=None, max_length=20)
     rut_updated_at: date | None = None
-    # Ubicación del PDF del RUT (se define cuando se implemente la validación del RUT)
+    # Referencia al PDF del RUT, que maneja el microservicio del RUT (se define al integrarse)
     rut_file_key: str | None = Field(default=None, max_length=500)
 
     # ── Datos de la organización (editables) ──
@@ -95,7 +95,7 @@ class ClientTaxResponsibility(BaseTable):
         CheckConstraint("code ~ '^[0-9]{1,2}$'", name="code_digits"),
     )
 
-    client_id: UUID = Field(foreign_key="clients.clients.id", index=True)
+    client_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.clients.id", index=True)
     code: str = Field(max_length=2)
 
 
@@ -122,7 +122,7 @@ class ClientUser(BaseTable):
         ),
     )
 
-    client_id: UUID = Field(foreign_key="clients.clients.id", index=True)
-    user_id: UUID = Field(foreign_key="accounts.users.id", index=True)
+    client_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.clients.id", index=True)
+    user_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.users.id", index=True)
     position: str | None = Field(default=None, max_length=100, description="Cargo en la empresa")
     is_primary_contact: bool = Field(default=False)

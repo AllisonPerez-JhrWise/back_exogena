@@ -8,7 +8,13 @@ from app.modules.clients.models import (
     PersonType,
 )
 from app.modules.notes.models import Note
-from app.shared.models import SQLModel, _with_schema, join_name_parts, load_all_models
+from app.shared.models import (
+    DB_SCHEMA,
+    SQLModel,
+    _with_schema,
+    join_name_parts,
+    load_all_models,
+)
 
 BASE_COLUMNS = {
     "id",
@@ -21,14 +27,11 @@ BASE_COLUMNS = {
 }
 
 
-def test_schema_comes_from_module_name():
-    assert User.__table__.schema == "accounts"
-    assert Note.__table__.schema == "notes"
+def test_every_table_lives_in_service_schema():
     # También con __table_args__ en forma de tupla (índices y checks)
-    for model in (Role, UserRole, UserIdentity):
-        assert model.__table__.schema == "accounts"
-    for model in (Client, ClientTaxResponsibility, ClientUser):
-        assert model.__table__.schema == "clients"
+    models = (User, Role, UserRole, UserIdentity, Client, ClientTaxResponsibility, ClientUser, Note)
+    for model in models:
+        assert model.__table__.schema == DB_SCHEMA
 
 
 def test_with_schema_keeps_explicit_schema_and_other_args():

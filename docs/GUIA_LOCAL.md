@@ -166,7 +166,7 @@ con un texto aleatorio de mínimo 32 caracteres.)
 | `port is already allocated` (8000 o 5433) | Otro programa usa ese puerto | Cierra ese programa. Si es una copia vieja de esta app: `make down` |
 | `JWT_SECRET … at least 32 characters` | La clave del `.env` es muy corta | Pon un texto aleatorio de 32 o más caracteres, o borra `.env` y ejecuta `make up` |
 | `service "app" is not running` | Usaste `make migrate`, `make shell`… con todo apagado | `make up` primero |
-| `relation "accounts.users" does not exist` | Faltan las tablas | `make migrate` |
+| `relation "exogena.users" does not exist` | Faltan las tablas | `make migrate` |
 | La app no arranca y no sabes por qué | — | `make logs` y lee el último error |
 | Todo está raro y quieres empezar limpio | — | `make reset` (⚠️ borra los datos **locales**) |
 
