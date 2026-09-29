@@ -4,7 +4,6 @@ from app.modules.catalog.router import obligations_router, service_types_router
 from app.modules.clients.router import companies_router, groups_router
 from app.modules.clients.router import router as clients_router
 from app.modules.engagements.router import router as engagements_router
-from app.modules.notes.router import router as notes_router
 from app.modules.platform.router import router as members_router
 
 # Aquí se registra el router de cada módulo
@@ -16,4 +15,3 @@ router.include_router(engagements_router, prefix="/companies", tags=["Engagement
 router.include_router(obligations_router, prefix="/obligations", tags=["Catalog"])
 router.include_router(service_types_router, prefix="/service-types", tags=["Catalog"])
 router.include_router(members_router, prefix="/members", tags=["Members"])
-router.include_router(notes_router, prefix="/notes", tags=["Notes (example)"])

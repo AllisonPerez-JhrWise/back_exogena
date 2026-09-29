@@ -30,9 +30,10 @@ app/
 │   └── v1.py               # Registers every module router under /api/v1
 └── modules/
     ├── platform/           # Read-only models of the platform tables (public) + permissions
-    ├── clients/            # Client registration on top of the platform tenants
-    ├── catalog/            # Obligations, service types and services (to create engagements)
-    └── notes/              # EXAMPLE module: copy it as a template, then delete it
+    ├── clients/            # Client registration: companies (one per NIT), groups, RUT versions
+    ├── engagements/        # Engagements of a company (service + fiscal year, partner, manager)
+    └── catalog/            # Obligations, service types and services (reference module)
+        └── (every module)  # same layers:
         ├── models.py       # Tables (all in the "exogena" schema)
         ├── schemas.py      # Request/response Pydantic models
         ├── repository.py   # Data access
@@ -81,11 +82,11 @@ app/
 
 - `users`, `tenants`, `roles`, `memberships`, `membership_roles`, `permissions`… live in `public` and belong to the platform service (its own Alembic). They have row-level security.
 - `app/modules/platform/models.py` describes them so we can query them and point FKs at them; `alembic/env.py` excludes them from our migrations.
-- Creating tenants and users goes through the platform functions (`app_crear_organizacion`, `app_crear_usuario`), which only `wiseerp_app` can run. The app connects as `wiseerp_app` (`DATABASE_URL`); migrations run as the owner of `exogena` (`MIGRATION_DATABASE_URL`).
+- This service never writes to the platform tables: people and memberships are created by Identidad (`POST /organizacion/miembros`). Our tables store platform IDs (organization, users) **without foreign keys**, like every service of the platform. The app connects as `wiseerp_app` (`DATABASE_URL`); migrations run as the owner of `exogena` (`MIGRATION_DATABASE_URL`).
 
 ## Adding a new module
 
-1. Copy `app/modules/notes/` to `app/modules/<name>/` and rename the classes.
+1. Create `app/modules/<name>/` with the same files as `app/modules/catalog/`.
 2. Define the table in `models.py` (inherit `BaseTable`, set `__tablename__`).
 3. Put permission/ownership rules in the service hooks: `scope`, `prepare_create`, `prepare_update`.
 4. Register the router in `app/api/v1.py`.

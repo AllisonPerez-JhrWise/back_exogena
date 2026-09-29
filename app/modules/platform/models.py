@@ -2,7 +2,7 @@
 
 NO son de este servicio: las crea y las cambia el servicio de plataforma con su propio
 Alembic (alembic/env.py las excluye de nuestras migraciones). Aquí solo se describen para
-consultarlas y para que las tablas de exogena les apunten con FK. Si la plataforma cambia
+consultarlas (nuestras tablas guardan sus IDs sin FK, como los demás servicios). Si cambia
 una columna, se actualiza aquí a mano (ver `make db-sync-cloud`).
 
 Todas tienen seguridad por filas (RLS): cada consulta solo ve lo que permiten

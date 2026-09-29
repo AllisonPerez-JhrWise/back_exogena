@@ -1,8 +1,8 @@
 # Skill: Creating a New Module / Endpoints
 
 The project is organized by business module under `app/modules/<module>/`, each
-with layers: router → service → repository → model. `app/modules/notes/` is the
-reference implementation; copy it.
+with layers: router → service → repository → model. `app/modules/catalog/` is a small
+reference implementation.
 
 ## 1. Model (`models.py`)
 

@@ -19,7 +19,6 @@ from uuid import UUID
 from sqlalchemy import CheckConstraint, Index, text
 from sqlmodel import Field
 
-from app.modules.platform.models import platform_fk
 from app.shared.models import DB_SCHEMA, BaseTable, join_name_parts
 
 
@@ -70,8 +69,9 @@ class Group(BaseTable):
         _active_unique("ux_groups_organization_name_key", "organization_id", "name_key"),
     )
 
-    # La firma (el tenant de la plataforma)
-    organization_id: UUID = Field(foreign_key=platform_fk("tenants"), index=True)
+    # La firma (el tenant de la plataforma). IDs de Identidad sin FK: ese schema no es de
+    # este servicio (así lo hacen todos los servicios de la plataforma)
+    organization_id: UUID = Field(index=True)
     name: str = Field(max_length=250, description="Como lo escribió quien lo creó")
     # group_name_key(name): lo que se compara para no repetir el grupo
     name_key: str = Field(max_length=250)
@@ -99,7 +99,7 @@ class Company(BaseTable):
         ),
     )
 
-    organization_id: UUID = Field(foreign_key=platform_fk("tenants"), index=True)
+    organization_id: UUID = Field(index=True)
     # Vacío = la empresa no pertenece a ningún grupo
     group_id: UUID | None = Field(default=None, foreign_key=f"{DB_SCHEMA}.groups.id", index=True)
 
@@ -216,5 +216,5 @@ class CompanyUser(BaseTable):
     full_name: str = Field(max_length=200)
     phone: str | None = Field(default=None, max_length=30, description="Celular")
     position: str | None = Field(default=None, max_length=100, description="Cargo en la empresa")
-    # La persona en la plataforma (public.users). Vacío = todavía no invitada
-    user_id: UUID | None = Field(default=None, foreign_key=platform_fk("users"), index=True)
+    # La persona en Identidad (sin FK). Vacío = todavía no invitada
+    user_id: UUID | None = Field(default=None, index=True)

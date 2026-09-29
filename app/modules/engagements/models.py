@@ -12,7 +12,6 @@ from uuid import UUID
 from sqlalchemy import CheckConstraint, Index, text
 from sqlmodel import Field
 
-from app.modules.platform.models import platform_fk
 from app.shared.models import DB_SCHEMA, BaseTable
 
 
@@ -42,8 +41,8 @@ class Engagement(BaseTable):
         CheckConstraint("status IN ('por_iniciar', 'en_curso', 'cerrado')", name="status_valid"),
     )
 
-    # La organización dueña del servicio (la firma)
-    tenant_id: UUID = Field(foreign_key=platform_fk("tenants"), index=True)
+    # La organización dueña del servicio (la firma). Los IDs de Identidad van sin FK
+    tenant_id: UUID = Field(index=True)
     company_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.companies.id", index=True)
     service_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.services.id", index=True)
     # Se copian del servicio: el compromiso los conserva aunque el servicio cambie después
@@ -53,6 +52,7 @@ class Engagement(BaseTable):
     # Obligatorio si la obligación es tributaria (lo valida el service)
     due_date: date | None = Field(default=None, description="Fecha de vencimiento")
     status: str = Field(default=EngagementStatus.POR_INICIAR, max_length=20)
-    # Equipo mínimo: socio y gerente siempre son requeridos (F1-03)
-    partner_user_id: UUID = Field(foreign_key=platform_fk("users"), description="Socio")
-    manager_user_id: UUID = Field(foreign_key=platform_fk("users"), description="Gerente")
+    # Equipo mínimo: socio y gerente siempre son requeridos (F1-03). Personas de Identidad
+    # (sin FK): que existan y tengan el rol lo valida el service al crear
+    partner_user_id: UUID = Field(description="Socio")
+    manager_user_id: UUID = Field(description="Gerente")

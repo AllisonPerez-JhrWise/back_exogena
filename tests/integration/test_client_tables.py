@@ -78,11 +78,6 @@ def test_group_name_key():
     assert group_name_key("Ñandú S.A.S") == "nandu s.a.s"
 
 
-async def test_group_and_company_require_existing_organization(db_session):
-    await assert_rejected(db_session, make_group(uuid4()))
-    await assert_rejected(db_session, make_company(uuid4()))
-
-
 async def test_company_requires_existing_group(db_session, firm):
     await assert_rejected(db_session, make_company(firm, group_id=uuid4()))
 
@@ -144,13 +139,9 @@ async def test_company_user_rules(db_session, firm):
         db_session, CompanyUser(company_id=andina.id, email="ana@x.co", full_name="Ana")
     )
     await save(db_session, CompanyUser(company_id=otra.id, email="ana@x.co", full_name="Ana"))
-    # El correo se guarda en minúsculas y la persona, si se indica, debe existir
+    # El correo se guarda en minúsculas
     await assert_rejected(
         db_session, CompanyUser(company_id=andina.id, email="Luis@X.co", full_name="Luis")
-    )
-    await assert_rejected(
-        db_session,
-        CompanyUser(company_id=andina.id, email="luis@x.co", full_name="Luis", user_id=uuid4()),
     )
 
 

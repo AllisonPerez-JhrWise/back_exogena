@@ -12,7 +12,6 @@ from uuid import UUID
 from sqlalchemy import CheckConstraint, Index, text
 from sqlmodel import Field
 
-from app.modules.platform.models import platform_fk
 from app.shared.models import DB_SCHEMA, BaseTable
 
 
@@ -43,7 +42,8 @@ class Obligation(BaseTable):
         CheckConstraint("nature IN ('tributaria', 'servicio_recurrente')", name="nature_valid"),
     )
 
-    tenant_id: UUID = Field(foreign_key=platform_fk("tenants"), index=True)
+    # La organización (la firma). ID de Identidad, sin FK
+    tenant_id: UUID = Field(index=True)
     name: str = Field(max_length=150)
     description: str | None = Field(default=None, max_length=500)
     nature: str = Field(max_length=20)
@@ -61,7 +61,7 @@ class ServiceType(BaseTable):
     __tablename__ = "service_types"
     __table_args__ = (_unique_name_per_tenant("service_types"),)
 
-    tenant_id: UUID = Field(foreign_key=platform_fk("tenants"), index=True)
+    tenant_id: UUID = Field(index=True)
     name: str = Field(max_length=150)
     description: str | None = Field(default=None, max_length=500)
     inactivation_reason: str | None = Field(default=None, max_length=500)
@@ -84,7 +84,7 @@ class Service(BaseTable):
         ),
     )
 
-    tenant_id: UUID = Field(foreign_key=platform_fk("tenants"), index=True)
+    tenant_id: UUID = Field(index=True)
     obligation_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.obligations.id", index=True)
     service_type_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.service_types.id", index=True)
     inactivation_reason: str | None = Field(default=None, max_length=500)
