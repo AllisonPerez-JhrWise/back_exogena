@@ -7,6 +7,8 @@ os.environ.setdefault(
     "DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5434/exogena_test"
 )
 os.environ.setdefault("JWT_SECRET", "test-secret-test-secret-test-secret-000")
+# Siempre apagado (aunque el .env local lo tenga encendido): los tests que lo usan lo activan
+os.environ["AUTH_BYPASS"] = "false"
 
 import pytest  # noqa: E402
 from pytest_asyncio import is_async_test  # noqa: E402

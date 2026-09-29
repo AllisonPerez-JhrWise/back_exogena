@@ -31,7 +31,7 @@ COMPOSE_TEST := docker compose -f docker-compose.test.yml
 # en Windows, make le pasa cada comando a sh con la codificacion antigua y se dañan.
 
 .PHONY: help up down restart status logs shell psql reset migrate migration db-check \
-        aws-status aws-sql aws-migrate test venv test-unit lint format clean check-docker
+        seed aws-status aws-sql aws-migrate aws-seed-catalog db-sync-cloud test venv test-unit lint format clean check-docker
 
 help: ## Muestra los comandos disponibles
 	@printf "\n$(BOLD)Comandos disponibles$(RESET)  (uso: make <comando>)\n"
@@ -90,12 +90,21 @@ migration: ## Crea una migración nueva. Uso: make migration m="agregar terceros
 db-check: ## Verifica que los modelos y las migraciones coincidan
 	docker compose exec app alembic check
 
+seed: ## Base LOCAL lista para probar: firma, administrador, catalogo y token para /docs
+	docker compose exec app python -m scripts.seed_local
+
 ##@ AWS (usa .env.aws)
 
 # Misma imagen de la app, pero con la conexión de .env.aws. MSYS_NO_PATHCONV evita que
 # Git Bash en Windows convierta /app en una ruta de Windows.
-AWS_ALEMBIC := MSYS_NO_PATHCONV=1 docker run --rm --env-file .env.aws \
-  -v "$(CURDIR):/app" -w /app back-exogena alembic
+# El .env local se monta con el código y la configuración también lo lee: se anulan sus
+# valores de desarrollo (modo de pruebas y la URL de migraciones de la base local), para que
+# todo use la DATABASE_URL de .env.aws
+AWS_RUN := MSYS_NO_PATHCONV=1 docker run --rm --env-file .env.aws -e PYTHONPATH=/app \
+  -e AUTH_BYPASS=false -e MIGRATION_DATABASE_URL= \
+  -v "$(CURDIR):/app" -w /app back-exogena
+AWS_ALEMBIC := $(AWS_RUN) alembic
+DB_INIT := docker/db-init
 
 aws-status: check-docker .env.aws ## Solo lectura: qué migración tiene la base de AWS
 	$(AWS_ALEMBIC) current
@@ -111,6 +120,32 @@ aws-migrate: check-docker .env.aws ## ⚠ Aplica las migraciones en la base de A
 	  else \
 	    echo "Cancelado. No se aplico nada."; \
 	  fi
+
+aws-seed-catalog: check-docker .env.aws ## ⚠ Carga el catalogo inicial en AWS. Uso: make aws-seed-catalog tenant=<uuid>
+	@if [ -z "$(tenant)" ]; then printf "$(YELLOW)Uso: make aws-seed-catalog tenant=<uuid de la firma>$(RESET)\n"; exit 1; fi
+	@printf "$(RED)Esto escribe en la base de datos de AWS (tenant $(tenant)).$(RESET) Continuar? [s/N] "; \
+	  read ans; ans=$$(printf '%s' "$$ans" | tr -cd 'a-zA-Z'); \
+	  if [ "$$ans" = "s" ] || [ "$$ans" = "S" ]; then \
+	    $(AWS_RUN) python -m scripts.seed_catalog --tenant-id $(tenant); \
+	  else \
+	    echo "Cancelado. No se cargo nada."; \
+	  fi
+
+db-sync-cloud: check-docker .env.aws ## Solo lectura: copia de AWS la estructura de public y los catalogos
+	@url=$$(grep '^DATABASE_URL=' .env.aws | cut -d= -f2- | sed 's/+asyncpg//'); \
+	  MSYS_NO_PATHCONV=1 docker run --rm -e PGSSLMODE=require -e "URL=$$url" postgres:18 \
+	    sh -c 'pg_dump "$$URL" --schema-only --schema=public --exclude-table=public.alembic_version_exogena' \
+	    > $(DB_INIT)/.plataforma.tmp
+	@{ printf '%s\n' \
+	    "-- Estructura del schema public de la plataforma, copiada de la RDS (wiseerp)." \
+	    "-- NO se edita a mano: la maneja el servicio de plataforma con su propio Alembic." \
+	    "-- Para actualizarla: make db-sync-cloud (requiere .env.aws)" ""; \
+	  sed -e '/^.restrict [A-Za-z0-9]*$$/d' -e '/^.unrestrict [A-Za-z0-9]*$$/d' \
+	    -e '/^CREATE SCHEMA public;$$/d' $(DB_INIT)/.plataforma.tmp; \
+	  } > $(DB_INIT)/10_plataforma.sql && rm $(DB_INIT)/.plataforma.tmp
+	$(AWS_RUN) python scripts/cloud_catalogs.py > $(DB_INIT)/.catalogos.tmp
+	@mv $(DB_INIT)/.catalogos.tmp $(DB_INIT)/20_catalogos.sql
+	@printf "$(GREEN)OK - Copiado. Revisa los cambios con git diff $(DB_INIT) y aplica con: make reset$(RESET)\n"
 
 ##@ Pruebas y calidad
 

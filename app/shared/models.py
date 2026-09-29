@@ -74,7 +74,7 @@ class BaseTable(SQLModel, metaclass=AutoTableMeta):
         nullable=True,
     )
 
-    # UUID simples (sin FK): el usuario puede vivir en otro servicio / proveedor de identidad
+    # id de public.users, sin FK: son solo auditoría y no deben impedir nada en la plataforma
     created_by: UUID | None = Field(default=None, nullable=True)
     updated_by: UUID | None = Field(default=None, nullable=True)
 

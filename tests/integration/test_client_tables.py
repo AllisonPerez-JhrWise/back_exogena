@@ -1,24 +1,22 @@
-"""Reglas de las tablas de usuarios y clientes, verificadas contra PostgreSQL real.
+"""Reglas de las tablas de empresas y grupos, verificadas contra PostgreSQL real.
 Cada caso intenta romper una regla y comprueba que la base de datos lo impide."""
+
+from datetime import date
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.modules.accounts.models import AuthProvider, User, UserIdentity
-from app.modules.clients.models import Client, ClientTaxResponsibility, ClientUser, PersonType
-
-
-def make_user(email: str, **extra) -> User:
-    return User(email=email, first_name=email.split("@")[0], last_name="Prueba", **extra)
-
-
-def make_client(nit: str = "900123456", **extra) -> Client:
-    values = {
-        "dv": "4",
-        "person_type": PersonType.JURIDICA,
-        "legal_name": "Comercializadora Andina SAS",
-    }
-    return Client(nit=nit, **{**values, **extra})
+from app.modules.clients.models import (
+    Company,
+    CompanyRutVersion,
+    CompanyTaxResponsibility,
+    CompanyUser,
+    Group,
+    PersonType,
+    first_covered_tax_year,
+    group_name_key,
+)
 
 
 async def save(session, *objs) -> None:
@@ -34,38 +32,69 @@ async def assert_rejected(session, *objs) -> None:
             await session.flush()
 
 
-async def test_create_client_with_users_in_one_transaction(db_session):
-    # El caso del mockup: la empresa, sus responsabilidades y sus 2 usuarios
-    client = make_client(
-        department_code="11",
-        city_code="11001",
-        main_activity_code="4719",
-        trade_name="Andina Comercial",
+def make_group(organization_id, name: str = "Grupo Muisca") -> Group:
+    return Group(organization_id=organization_id, name=name, name_key=group_name_key(name))
+
+
+def make_company(organization_id, nit: str = "900123456", **extra) -> Company:
+    values = {
+        "dv": "4",
+        "person_type": PersonType.JURIDICA,
+        "legal_name": "Comercializadora Andina SAS",
+    }
+    return Company(organization_id=organization_id, nit=nit, **{**values, **extra})
+
+
+async def test_group_with_companies_versions_and_users(db_session, firm, platform):
+    group = make_group(firm)
+    await save(db_session, group)
+    textiles = make_company(firm, "901223884", legal_name="Textiles Muisca SAS", group_id=group.id)
+    zona_franca = make_company(
+        firm, "901556201", legal_name="Textiles Muisca Zona Franca SAS", group_id=group.id
     )
-    paula = make_user("paula.cordoba@andina.com.co", phone="+57 310 555 4321")
-    carlos = make_user("carlos.mejia@revisoria.com.co")
-    await save(db_session, client, paula, carlos)
+    solo = make_company(firm, "800197268", legal_name="Andina SAS")  # sin grupo
+    await save(db_session, textiles, zona_franca, solo)
+    laura = await platform.user("laura@muisca.co")
     await save(
         db_session,
-        *(ClientTaxResponsibility(client_id=client.id, code=c) for c in ("05", "48", "42")),
-        ClientUser(
-            client_id=client.id, user_id=paula.id, position="Contadora", is_primary_contact=True
-        ),
-        ClientUser(client_id=client.id, user_id=carlos.id, position="Revisor fiscal"),
+        *(CompanyTaxResponsibility(company_id=textiles.id, code=c) for c in ("05", "48")),
+        CompanyRutVersion(company_id=textiles.id, generated_at=date(2026, 9, 5)),
+        # Una persona ya invitada y otra pendiente de invitar
+        CompanyUser(company_id=textiles.id, email="laura@muisca.co", full_name="L", user_id=laura),
+        CompanyUser(company_id=textiles.id, email="pedro@muisca.co", full_name="Pedro"),
     )
-    await db_session.commit()
-
-    assert paula.can_login is False  # los usuarios de clientes no entran por ahora
 
 
-async def test_nit_is_unique_among_active_clients(db_session):
-    first = make_client()
+async def test_group_name_is_unique_in_the_organization(db_session, firm, platform):
+    await save(db_session, make_group(firm, "Grupo Sacyr"))
+    # El mismo grupo escrito distinto: misma clave, no se permite
+    await assert_rejected(db_session, make_group(firm, "  GRUPO   sacýr "))
+    # En otra firma sí
+    await save(db_session, make_group(await platform.tenant("otra-firma"), "Grupo Sacyr"))
+
+
+def test_group_name_key():
+    assert group_name_key("  GRUPO   Sacýr ") == group_name_key("Grupo Sacyr") == "grupo sacyr"
+    assert group_name_key("Ñandú S.A.S") == "nandu s.a.s"
+
+
+async def test_company_requires_existing_group(db_session, firm):
+    await assert_rejected(db_session, make_company(firm, group_id=uuid4()))
+
+
+async def test_nit_is_unique_in_the_organization(db_session, firm):
+    first = make_company(firm)
     await save(db_session, first)
-    await assert_rejected(db_session, make_client())
+    await assert_rejected(db_session, make_company(firm))
 
     # Con borrado lógico, el NIT se puede volver a usar
     first.is_deleted = True
-    await save(db_session, first, make_client())
+    await save(db_session, first, make_company(firm))
+
+
+async def test_same_nit_in_another_organization(db_session, platform):
+    for firm_slug in ("firma-1", "firma-2"):
+        await save(db_session, make_company(await platform.tenant(firm_slug)))
 
 
 @pytest.mark.parametrize(
@@ -79,82 +108,18 @@ async def test_nit_is_unique_among_active_clients(db_session):
         ("main_activity_code", "47"),
     ],
 )
-async def test_client_formats_are_enforced(db_session, field, value):
-    await assert_rejected(db_session, make_client(**{field: value}))
+async def test_company_formats_are_enforced(db_session, firm, field, value):
+    await assert_rejected(db_session, make_company(firm, **{field: value}))
 
 
-async def test_only_one_primary_contact_per_client(db_session):
-    client, ana, luis = make_client(), make_user("ana@x.co"), make_user("luis@x.co")
-    await save(db_session, client, ana, luis)
-    await save(db_session, ClientUser(client_id=client.id, user_id=ana.id, is_primary_contact=True))
-    await assert_rejected(
-        db_session, ClientUser(client_id=client.id, user_id=luis.id, is_primary_contact=True)
-    )
-
-
-async def test_same_person_in_several_clients_with_different_positions(db_session):
-    # Un revisor fiscal puede estar en varias empresas, pero no dos veces en la misma
-    andina, otra = make_client("900123456"), make_client("800111222")
-    carlos = make_user("carlos@revisoria.com.co")
-    await save(db_session, andina, otra, carlos)
-    await save(
-        db_session,
-        ClientUser(client_id=andina.id, user_id=carlos.id, position="Revisor fiscal"),
-        ClientUser(client_id=otra.id, user_id=carlos.id, position="Revisor fiscal suplente"),
-    )
-    await assert_rejected(db_session, ClientUser(client_id=andina.id, user_id=carlos.id))
-
-
-async def test_client_user_requires_existing_user(db_session):
-    client = make_client()
-    await save(db_session, client)
-    await assert_rejected(db_session, ClientUser(client_id=client.id, user_id=client.id))
-
-
-async def test_user_email_rules(db_session):
-    await save(db_session, make_user("ana@x.co"))
-    await assert_rejected(db_session, make_user("ana@x.co"))  # repetido
-    await assert_rejected(db_session, make_user("Luis@X.co"))  # debe ir en minúsculas
-
-
-async def test_identity_rules(db_session):
-    ana, luis = make_user("ana@x.co"), make_user("luis@x.co")
-    await save(db_session, ana, luis)
-    await save(
-        db_session,
-        UserIdentity(user_id=ana.id, provider=AuthProvider.GOOGLE, subject="google-1"),
-        UserIdentity(user_id=ana.id, provider=AuthProvider.MICROSOFT, subject="ms-1"),
-    )
-    # La misma cuenta de Google no puede ser de dos personas
-    await assert_rejected(
-        db_session, UserIdentity(user_id=luis.id, provider=AuthProvider.GOOGLE, subject="google-1")
-    )
-    # Contraseña sin hash, o Google con hash: no
+async def test_name_depends_on_person_type(db_session, firm):
+    await assert_rejected(db_session, make_company(firm, legal_name=None))
     await assert_rejected(
         db_session,
-        UserIdentity(user_id=luis.id, provider=AuthProvider.PASSWORD, subject="luis@x.co"),
+        make_company(firm, person_type=PersonType.NATURAL, legal_name=None, first_name="Juan"),
     )
-    await assert_rejected(
-        db_session,
-        UserIdentity(
-            user_id=luis.id, provider=AuthProvider.GOOGLE, subject="g-2", password_hash="x"
-        ),
-    )
-    await assert_rejected(
-        db_session, UserIdentity(user_id=luis.id, provider="facebook", subject="fb-1")
-    )
-
-
-async def test_name_depends_on_person_type(db_session):
-    # Jurídica sin razón social: no
-    await assert_rejected(db_session, make_client(legal_name=None))
-    # Natural sin primer apellido: no
-    await assert_rejected(
-        db_session,
-        make_client(person_type=PersonType.NATURAL, legal_name=None, first_name="Juan"),
-    )
-    # Natural con primer nombre y primer apellido: sí (el resto es opcional)
-    natural = make_client(
+    natural = make_company(
+        firm,
         "1020304050",
         person_type=PersonType.NATURAL,
         legal_name=None,
@@ -163,3 +128,26 @@ async def test_name_depends_on_person_type(db_session):
     )
     await save(db_session, natural)
     assert natural.display_name == "Juan Restrepo"
+
+
+async def test_company_user_rules(db_session, firm):
+    andina, otra = make_company(firm), make_company(firm, "800197268")
+    await save(db_session, andina, otra)
+    await save(db_session, CompanyUser(company_id=andina.id, email="ana@x.co", full_name="Ana"))
+    # La misma persona no se repite en una empresa, pero sí puede estar en otra
+    await assert_rejected(
+        db_session, CompanyUser(company_id=andina.id, email="ana@x.co", full_name="Ana")
+    )
+    await save(db_session, CompanyUser(company_id=otra.id, email="ana@x.co", full_name="Ana"))
+    # El correo se guarda en minúsculas
+    await assert_rejected(
+        db_session, CompanyUser(company_id=andina.id, email="Luis@X.co", full_name="Luis")
+    )
+
+
+@pytest.mark.parametrize(
+    "updated_at, year",
+    [(date(2026, 9, 12), 2026), (date(2026, 1, 1), 2025), (date(2026, 1, 2), 2026)],
+)
+def test_first_covered_tax_year(updated_at, year):
+    assert first_covered_tax_year(updated_at) == year
