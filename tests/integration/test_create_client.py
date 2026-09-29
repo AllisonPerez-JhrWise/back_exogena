@@ -1,24 +1,25 @@
-"""POST /api/v1/clients: el asistente "Nuevo cliente" de punta a punta, sobre la
-plataforma (tenants, users, memberships) con su seguridad por filas."""
+"""POST /api/v1/clients: el asistente "Nuevo cliente" de punta a punta.
+
+Todo pasa dentro de la firma (X-Tenant-Id): los clientes no son tenants de la plataforma."""
 
 import copy
 from datetime import date, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 
 from app.core.exceptions import BusinessRuleError
 from app.modules.clients.models import (
     Client,
-    ClientMember,
+    ClientUser,
     Company,
     CompanyRutVersion,
     CompanyTaxResponsibility,
 )
 from app.modules.clients.nit import calculate_dv
 from app.modules.clients.service import ClientService
-from app.modules.platform.models import MembershipStatus, SystemRole, Tenant, TenantKind, User
+from app.modules.platform.models import MembershipStatus, SystemRole, Tenant, TenantKind
 from tests.integration.conftest import auth_headers
 
 URL = "/api/v1/clients"
@@ -86,20 +87,9 @@ async def count(session, model, *conditions) -> int:
     return await session.scalar(select(func.count()).select_from(model).where(*conditions))
 
 
-async def role_of(session, user_id: UUID, tenant_id: UUID) -> tuple[str, str]:
-    """(rol, estado) de la membresía de la persona en el tenant."""
-    row = (
-        await session.execute(
-            text(
-                "SELECT r.code, m.status FROM public.memberships m "
-                "JOIN public.membership_roles mr ON mr.membership_id = m.id "
-                "JOIN public.roles r ON r.id = mr.role_id "
-                "WHERE m.user_id = :user_id AND m.tenant_id = :tenant_id"
-            ),
-            {"user_id": user_id, "tenant_id": tenant_id},
-        )
-    ).one()
-    return row.code, row.status
+async def client_tenants(session) -> int:
+    """Tenants de tipo cliente: siempre 0, porque los clientes no son tenants."""
+    return await count(session, Tenant, Tenant.kind == TenantKind.CLIENT)
 
 
 async def test_new_client_with_company_and_users(client, admin, db_session):
@@ -121,24 +111,29 @@ async def test_new_client_with_company_and_users(client, admin, db_session):
     assert company["tax_responsibilities"] == ["05", "48", "42"]
     assert (company["rut_generated_at"], company["rut_updated_at"]) == (GENERATED, "2026-09-12")
 
-    # La cuenta del cliente en la plataforma
-    tenant = await db_session.get(Tenant, UUID(data["client"]["tenant_id"]))
-    assert (tenant.kind, tenant.name) == (TenantKind.CLIENT, "Comercializadora Andina SAS")
+    # El cliente es un registro de la firma: no se crea ningún tenant
+    assert await client_tenants(db_session) == 0
 
     # Primera versión del RUT, con sus dos fechas y el año gravable que cubre
     version = (await db_session.execute(select(CompanyRutVersion))).scalar_one()
     assert (version.generated_at.isoformat(), version.covers_tax_year) == (GENERATED, 2026)
     assert version.is_historical is False
 
-    # Usuarios: invitados, rol cliente, sin Cognito todavía
-    assert [(u["full_name"], u["role"], u["position"]) for u in data["users"]] == [
-        ("Paula Córdoba", "cliente", "Contadora"),
-        ("Carlos Mejía", "cliente", "Revisor fiscal"),
+    # Usuarios: asignados al cliente, pendientes de invitar con la plataforma
+    assert [(u["full_name"], u["position"], u["phone"], u["user_id"]) for u in data["users"]] == [
+        ("Paula Córdoba", "Contadora", "+57 310 555 4321", None),
+        ("Carlos Mejía", "Revisor fiscal", "+57 315 222 1098", None),
     ]
-    paula = UUID(data["users"][0]["user_id"])
-    assert (await db_session.get(User, paula)).cognito_sub is None
-    assert await role_of(db_session, paula, tenant.id) == ("cliente", "invited")
-    assert await count(db_session, ClientMember) == 2
+    assert await count(db_session, ClientUser) == 2
+
+
+async def test_new_client_can_be_named_as_a_group(client, admin):
+    response = await client.post(URL, json=payload(client_name="Grupo Andina"), headers=admin)
+
+    assert response.status_code == 201, response.text
+    data = response.json()["data"]
+    assert data["client"]["name"] == "Grupo Andina"
+    assert data["company"]["display_name"] == "Comercializadora Andina SAS"
 
 
 async def test_steps_3_and_4_are_optional(client, admin, db_session):
@@ -151,7 +146,7 @@ async def test_steps_3_and_4_are_optional(client, admin, db_session):
     data = response.json()["data"]
     assert (data["users"], data["engagements"]) == ([], [])
     assert data["company"]["trade_name"] is None
-    assert await count(db_session, Tenant, Tenant.kind == TenantKind.CLIENT) == 1
+    assert await count(db_session, Client) == 1
 
 
 async def test_company_is_added_to_an_existing_client(client, admin, db_session):
@@ -173,12 +168,20 @@ async def test_company_is_added_to_an_existing_client(client, admin, db_session)
     # Los datos de contacto son por empresa: el cliente conserva los suyos
     assert data["company"]["contact_name"] == "Otra persona"
     assert data["client"]["contact_name"] == "Paula Córdoba"
-    # Una sola cuenta y un solo registro por persona; el cargo se actualiza
-    assert await count(db_session, Tenant, Tenant.kind == TenantKind.CLIENT) == 1
+    # Un solo cliente con dos empresas; la persona no se duplica y su cargo se actualiza
+    assert await count(db_session, Client) == 1
     assert await count(db_session, Company, Company.client_id == UUID(client_id)) == 2
-    assert await count(db_session, ClientMember) == 2
-    assert data["users"][0]["user_id"] == first["users"][1]["user_id"]
+    assert await count(db_session, ClientUser) == 2
+    assert data["users"][0]["id"] == first["users"][1]["id"]
     assert data["users"][0]["position"] == "Revisor fiscal suplente"
+
+
+async def test_group_name_only_applies_to_a_new_client(client, admin):
+    first = (await client.post(URL, json=PAYLOAD, headers=admin)).json()["data"]
+    body = payload(client_id=first["client"]["id"], client_name="Otro", rut=OTHER_COMPANY_RUT)
+    response = await client.post(URL, json=body, headers=admin)
+    assert response.status_code == 422
+    assert "client_name only applies" in str(response.json()["details"])
 
 
 async def test_existing_client_of_another_organization_is_not_found(
@@ -255,7 +258,7 @@ async def test_rut_rules_block_the_creation(client, admin, db_session, rut, caus
     assert response.status_code == 422
     assert response.json()["details"]["cause"] == cause
     assert await count(db_session, Company) == 0
-    assert await count(db_session, Tenant, Tenant.kind == TenantKind.CLIENT) == 0
+    assert await client_tenants(db_session) == 0
 
 
 async def test_rut_of_exactly_30_days_is_accepted(client, admin):
@@ -325,57 +328,35 @@ async def test_natural_person_client(client, admin):
 
 async def test_nothing_is_saved_if_something_fails(client, admin, db_session, monkeypatch):
     """Si falla a mitad de camino (aquí, al crear el 2.º usuario), no queda nada guardado."""
-    original = ClientService._get_or_create_user
+    original = ClientService._add_user
     calls = {"n": 0}
 
-    async def fail_on_second_user(self, item):
+    async def fail_on_second_user(self, client, item, actor):
         calls["n"] += 1
         if calls["n"] == 2:
             raise BusinessRuleError("Simulated failure")
-        return await original(self, item)
+        return await original(self, client, item, actor)
 
-    monkeypatch.setattr(ClientService, "_get_or_create_user", fail_on_second_user)
+    monkeypatch.setattr(ClientService, "_add_user", fail_on_second_user)
     response = await client.post(URL, json=PAYLOAD, headers=admin)
 
     assert response.status_code == 422
-    for model in (Client, Company, CompanyTaxResponsibility, CompanyRutVersion, ClientMember):
+    for model in (Client, Company, CompanyTaxResponsibility, CompanyRutVersion, ClientUser):
         assert await count(db_session, model) == 0
-    assert await count(db_session, Tenant, Tenant.kind == TenantKind.CLIENT) == 0
-    assert await count(db_session, User, User.email == "paula.cordoba@andina.com.co") == 0
 
 
-async def test_person_from_another_client_is_not_linked_yet(client, admin, db_session, platform):
-    """La seguridad por filas no deja ver a una persona de otro tenant. Hasta que la
-    plataforma tenga una función para buscarla por email, se rechaza sin guardar nada."""
-    other_client = await platform.tenant("cliente-otro", TenantKind.CLIENT)
-    carlos = await platform.user("carlos.mejia@revisoria.com.co", "Carlos Mejía")
-    await platform.member(carlos, other_client, SystemRole.CLIENTE)
+async def test_same_person_in_several_clients(client, admin, db_session):
+    """Un revisor fiscal puede estar asignado a varios clientes, con un cargo en cada uno."""
+    await client.post(URL, json=PAYLOAD, headers=admin)
+    other = payload(
+        rut=OTHER_COMPANY_RUT,
+        users=[{**PAYLOAD["users"][1], "position": "Revisor fiscal suplente"}],
+    )
+    response = await client.post(URL, json=other, headers=admin)
 
-    response = await client.post(URL, json=PAYLOAD, headers=admin)
-
-    assert response.status_code == 409
-    assert response.json()["details"] == {"email": "carlos.mejia@revisoria.com.co"}
-    assert await count(db_session, Company) == 0
-
-
-async def test_client_account_is_visible_only_inside_it(client, admin, db_session):
-    """Seguridad por filas: como wiseerp_app, la cuenta nueva solo se ve declarándola."""
-    tenant_id = (await client.post(URL, json=PAYLOAD, headers=admin)).json()["data"]["client"][
-        "tenant_id"
-    ]
-    await db_session.execute(text("SET ROLE wiseerp_app"))
-    try:
-        for tenant_context, expected in (("", 0), (tenant_id, 1)):
-            await db_session.execute(
-                text("SELECT set_config('app.tenant_id', :t, true)"), {"t": tenant_context}
-            )
-            await db_session.execute(text("SELECT set_config('app.user_id', '', true)"))
-            visible = await db_session.scalar(
-                text("SELECT count(*) FROM public.tenants WHERE id = :id"), {"id": tenant_id}
-            )
-            assert visible == expected
-    finally:
-        await db_session.execute(text("RESET ROLE"))
+    assert response.status_code == 201, response.text
+    carlos = select(ClientUser.position).where(ClientUser.email == "carlos.mejia@revisoria.com.co")
+    assert sorted(await db_session.scalars(carlos)) == ["Revisor fiscal", "Revisor fiscal suplente"]
 
 
 # ── Paso 1: NIT existente y buscador de clientes ──

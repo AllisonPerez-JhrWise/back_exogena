@@ -98,6 +98,9 @@ class ClientCreate(BaseModel):
 
     # Paso 1: vacío = cliente nuevo; un id = agregar la empresa a ese cliente (grupo)
     client_id: UUID | None = None
+    # Solo para un cliente nuevo: el nombre del grupo (p. ej. "Grupo Sacyr"). Vacío = el
+    # nombre de la empresa (un cliente con una sola empresa se comporta como ella)
+    client_name: str | None = Field(default=None, min_length=1, max_length=250)
     rut: RutIn
     organization: OrganizationDataIn = Field(default_factory=OrganizationDataIn)
     engagements: list[EngagementIn] = Field(default_factory=list)
@@ -105,6 +108,8 @@ class ClientCreate(BaseModel):
 
     @model_validator(mode="after")
     def _check_lists(self) -> "ClientCreate":
+        if self.client_id and self.client_name:
+            raise ValueError("client_name only applies to a new client (without client_id)")
         emails = [user.email.lower() for user in self.users]
         if len(set(emails)) != len(emails):
             raise ValueError("users has repeated emails")
@@ -121,8 +126,7 @@ class ClientRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    tenant_id: UUID = Field(description="La cuenta del cliente en la plataforma")
-    name: str
+    name: str = Field(description="Nombre del cliente o del grupo")
     contact_name: str | None = None
     contact_email: str | None = None
     contact_phone: str | None = None
@@ -163,13 +167,17 @@ class CompanyRead(BaseModel):
 
 
 class ClientUserRead(BaseModel):
-    user_id: UUID
-    membership_id: UUID
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
     email: EmailStr
     full_name: str
-    role: str = Field(description="Rol en la cuenta del cliente")
     phone: str | None = None
     position: str | None = None
+    user_id: UUID | None = Field(
+        default=None,
+        description="La persona en la plataforma. Vacío = pendiente de invitar",
+    )
 
 
 class ClientCreated(BaseModel):

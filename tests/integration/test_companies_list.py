@@ -7,7 +7,7 @@ from uuid import UUID
 import pytest
 from sqlalchemy import text, update
 
-from app.modules.clients.models import Company
+from app.modules.clients.models import ClientUser, Company
 from app.modules.clients.nit import calculate_dv
 from app.modules.platform.models import SystemRole
 from tests.integration.conftest import auth_headers
@@ -167,13 +167,24 @@ async def test_associate_without_engagements_sees_nothing(client, screen, staff)
     assert rows(await client.get(URL, headers=asociado)) == []
 
 
-async def test_client_user_sees_only_its_companies(client, screen, platform):
-    """El usuario del cliente trabaja con el X-Tenant-Id de la cuenta de su cliente."""
-    tenant = UUID(screen.muisca["client"]["tenant_id"])
+async def test_client_user_sees_only_the_companies_of_its_client(
+    client, screen, platform, firm, db_session
+):
+    """El usuario del cliente tiene su acceso en la firma (rol cliente) y ve las empresas de
+    los clientes a los que está asignado (client_users)."""
     laura = await platform.user("laura@muisca.co")
-    await platform.member(laura, tenant, SystemRole.CLIENTE)
+    await platform.member(laura, firm, SystemRole.CLIENTE)
+    db_session.add(
+        ClientUser(
+            client_id=UUID(screen.muisca["client"]["id"]),
+            email="laura@muisca.co",
+            full_name="Laura",
+            user_id=laura,
+        )
+    )
+    await db_session.commit()
 
-    response = await client.get(URL, headers=auth_headers(laura, tenant))
+    response = await client.get(URL, headers=auth_headers(laura, firm))
     assert [row["display_name"] for row in rows(response)] == [
         "Andina Zona Franca SAS",
         "Textiles Muisca SAS",

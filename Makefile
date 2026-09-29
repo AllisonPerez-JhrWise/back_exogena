@@ -97,9 +97,12 @@ seed: ## Base LOCAL lista para probar: firma, administrador, catalogo y token pa
 
 # Misma imagen de la app, pero con la conexión de .env.aws. MSYS_NO_PATHCONV evita que
 # Git Bash en Windows convierta /app en una ruta de Windows.
-# AUTH_BYPASS=false: el .env local (montado con el código) lo tiene encendido para pruebas
+# El .env local se monta con el código y la configuración también lo lee: se anulan sus
+# valores de desarrollo (modo de pruebas y la URL de migraciones de la base local), para que
+# todo use la DATABASE_URL de .env.aws
 AWS_RUN := MSYS_NO_PATHCONV=1 docker run --rm --env-file .env.aws -e PYTHONPATH=/app \
-  -e AUTH_BYPASS=false -v "$(CURDIR):/app" -w /app back-exogena
+  -e AUTH_BYPASS=false -e MIGRATION_DATABASE_URL= \
+  -v "$(CURDIR):/app" -w /app back-exogena
 AWS_ALEMBIC := $(AWS_RUN) alembic
 DB_INIT := docker/db-init
 

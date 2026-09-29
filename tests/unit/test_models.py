@@ -2,7 +2,7 @@ from sqlalchemy import Index
 
 from app.modules.clients.models import (
     Client,
-    ClientMember,
+    ClientUser,
     Company,
     CompanyRutVersion,
     CompanyTaxResponsibility,
@@ -38,7 +38,7 @@ def own_tables():
 
 def test_own_tables_live_in_service_schema():
     # También con __table_args__ en forma de tupla (índices y checks)
-    for model in (Client, Company, CompanyTaxResponsibility, CompanyRutVersion, ClientMember, Note):
+    for model in (Client, Company, CompanyTaxResponsibility, CompanyRutVersion, ClientUser, Note):
         assert model.__table__.schema == DB_SCHEMA
     for model in (User, Tenant, Membership):
         assert model.__table__.schema is None  # schema por defecto (public)

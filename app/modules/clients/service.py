@@ -1,8 +1,6 @@
 from datetime import date
-from uuid import UUID, uuid4
+from uuid import UUID
 
-from pydantic import BaseModel
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import Principal
@@ -12,7 +10,7 @@ from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
 from app.modules.clients.listing import CompanyFilters, CompanyScope, list_companies
 from app.modules.clients.models import (
     Client,
-    ClientMember,
+    ClientUser,
     Company,
     CompanyRutVersion,
     CompanyTaxResponsibility,
@@ -20,8 +18,8 @@ from app.modules.clients.models import (
     first_covered_tax_year,
 )
 from app.modules.clients.repository import (
-    ClientMemberRepository,
     ClientRepository,
+    ClientUserRepository,
     CompanyRepository,
     CompanyRutVersionRepository,
     CompanyTaxResponsibilityRepository,
@@ -39,15 +37,9 @@ from app.modules.clients.schemas import (
     RutIn,
 )
 from app.modules.engagements.service import EngagementService
-from app.modules.platform.models import MembershipStatus, Permission, SystemRole
+from app.modules.platform.models import Permission
 from app.modules.platform.repository import PlatformRepository
 from app.shared.pagination import Page, PageParams
-
-
-class PlatformUser(BaseModel):
-    id: UUID
-    email: str
-    full_name: str
 
 
 class ClientService:
@@ -57,7 +49,7 @@ class ClientService:
         self.companies = CompanyRepository(session)
         self.responsibilities = CompanyTaxResponsibilityRepository(session)
         self.rut_versions = CompanyRutVersionRepository(session)
-        self.members = ClientMemberRepository(session)
+        self.users = ClientUserRepository(session)
         self.platform = PlatformRepository(session)
         # Comparte la sesión: los compromisos quedan en esta misma transacción
         self.engagements = EngagementService(session)
@@ -68,13 +60,15 @@ class ClientService:
         self, data: ClientCreate, actor: Principal, organization_id: UUID
     ) -> ClientCreated:
         """Crea en UNA operación (si algo falla, no queda nada a medias):
-        1. El cliente (su cuenta en la plataforma), o usa el existente si llega client_id.
+        1. El cliente (grupo), o usa el existente si llega client_id.
         2. La empresa con los datos del RUT, sus responsabilidades y la primera versión
            del RUT con sus dos fechas.
         3. Los compromisos del paso 3 (opcional), en estado por_iniciar.
-        4. Los usuarios del paso 4 (opcional): invitados con el rol `cliente`.
+        4. Los usuarios del paso 4 (opcional), asignados al cliente y pendientes de invitar
+           (invitarlos a la firma es de la plataforma: POST /tenant/miembros).
 
-        organization_id es la firma de quien crea (X-Tenant-Id)."""
+        organization_id es la firma de quien crea (X-Tenant-Id). Todo pasa dentro de ella:
+        los clientes no son tenants."""
         self._check_rut(data.rut)
         existing = await self.companies.get_by_nit(organization_id, data.rut.nit)
         if existing:
@@ -97,9 +91,6 @@ class ClientService:
             created_by=actor.id,
         )
         client = await self._get_or_create_client(data, company, organization_id, actor)
-        # De aquí en adelante se trabaja dentro de la cuenta del cliente (seguridad por filas)
-        await set_db_context(self.session, user_id=actor.id, tenant_id=client.tenant_id)
-
         company.client_id = client.id
         company = await self.companies.add(company)
         for code in data.rut.tax_responsibilities:
@@ -165,17 +156,12 @@ class ClientService:
                 raise NotFoundError("Client not found")
             return client
 
-        # Cliente nuevo: su cuenta en la plataforma y sus datos (los de la primera empresa)
-        tenant_id = uuid4()
-        await set_db_context(self.session, user_id=actor.id, tenant_id=tenant_id)
-        await self.platform.insert_client_tenant(
-            tenant_id, slug=f"cliente-{tenant_id.hex}", name=company.display_name
-        )
+        # Cliente nuevo: con el nombre del grupo, o el de la empresa si no se dio;
+        # el contacto y las notas se toman de la empresa
         return await self.clients.add(
             Client(
                 organization_id=organization_id,
-                tenant_id=tenant_id,
-                name=company.display_name,
+                name=data.client_name or company.display_name,
                 contact_name=company.contact_name,
                 contact_email=company.contact_email,
                 contact_phone=company.contact_phone,
@@ -187,63 +173,29 @@ class ClientService:
     async def _add_user(
         self, client: Client, item: ClientUserIn, actor: Principal
     ) -> ClientUserRead:
-        """Da acceso a la persona a la cuenta del cliente (invitada, rol `cliente`).
-        Si ya tenía acceso, no se duplica; su cargo y celular se actualizan."""
-        user = await self._get_or_create_user(item)
-        membership = await self.platform.get_membership(user.id, client.tenant_id)
-        if membership:
-            membership_id = membership.id
-        else:
-            role = await self.platform.get_system_role(SystemRole.CLIENTE)
-            membership_id = await self.platform.add_membership(
-                user.id, client.tenant_id, role.id, MembershipStatus.INVITED
-            )
-        member = await self.members.get_by_membership(membership_id)
-        if member:
-            member = await self.members.update(
-                member, {"position": item.position, "phone": item.phone, "updated_by": actor.id}
+        """Asigna la persona al cliente con su cargo y celular. Si ya estaba asignada (mismo
+        correo), no se duplica: se actualizan su cargo y celular.
+
+        PENDIENTE: invitarla a la firma con la plataforma (POST /tenant/miembros, que crea
+        la persona y su acceso con el rol `cliente`) y guardar su user_id. Mientras tanto
+        queda pendiente de invitar."""
+        existing = await self.users.get_by_email(client.id, item.email)
+        if existing:
+            user = await self.users.update(
+                existing, {"position": item.position, "phone": item.phone, "updated_by": actor.id}
             )
         else:
-            member = await self.members.add(
-                ClientMember(
+            user = await self.users.add(
+                ClientUser(
                     client_id=client.id,
-                    membership_id=membership_id,
-                    position=item.position,
+                    email=item.email.lower(),
+                    full_name=item.full_name,
                     phone=item.phone,
+                    position=item.position,
                     created_by=actor.id,
                 )
             )
-        return ClientUserRead(
-            user_id=user.id,
-            membership_id=membership_id,
-            email=user.email,
-            full_name=user.full_name,
-            role=SystemRole.CLIENTE,
-            phone=member.phone,
-            position=member.position,
-        )
-
-    async def _get_or_create_user(self, item: ClientUserIn) -> PlatformUser:
-        """Usa la persona si ya existe (sin cambiar sus datos); si no, la crea sin acceso.
-
-        Limitación: la seguridad por filas no deja ver a una persona que ya está en otro
-        tenant (p. ej. un revisor fiscal de otro cliente). Falta que la plataforma exponga
-        una función para buscar por email (tipo app_usuario_por_email)."""
-        existing = await self.platform.find_user_by_email(item.email)
-        if existing:
-            return PlatformUser(
-                id=existing.id, email=existing.email, full_name=existing.full_name or ""
-            )
-        try:
-            async with self.session.begin_nested():
-                user_id = await self.platform.create_user(item.email, item.full_name)
-        except IntegrityError:
-            raise ConflictError(
-                "This person already exists in another organization. Linking existing "
-                "people is not available yet.",
-                details={"email": item.email.lower()},
-            ) from None
-        return PlatformUser(id=user_id, email=item.email.lower(), full_name=item.full_name)
+        return ClientUserRead.model_validate(user)
 
     @staticmethod
     def _company_read(company: Company, responsibilities: list[str]) -> CompanyRead:
@@ -284,21 +236,19 @@ class ClientService:
         return Page.create(items, total, params)
 
     async def _scope(self, actor: Principal, tenant_id: UUID | None) -> CompanyScope:
-        """Alcance de la tarea (F0-02):
-        - El Cliente (trabaja en la cuenta de su cliente): solo sus empresas.
-        - El Administrador (clientes.crear en la firma): todas las de la organización.
-        - Socio y Gerente: las empresas de sus compromisos. (Senior y Asociado, las de
-          los compromisos donde están asignados, cuando exista el equipo del compromiso.)"""
+        """Alcance de la tarea (F0-02). Todos trabajan dentro de la firma (X-Tenant-Id):
+        - El Administrador (clientes.crear): todas las empresas de la organización.
+        - Los demás: las empresas de sus compromisos (Socio y Gerente) y las de los
+          clientes a los que están asignados (el Cliente, por client_users).
+          Senior y Asociado verán las de los compromisos donde estén asignados cuando
+          exista el equipo del compromiso."""
         if tenant_id is None:  # solo AUTH_BYPASS sin DEV_TENANT_ID (pruebas locales)
             return CompanyScope()
-        client = await self.clients.get_by_tenant(tenant_id)
-        if client:
-            return CompanyScope(client_id=client.id)
         if settings.auth_bypass and actor.id == settings.dev_user_id:
             return CompanyScope(organization_id=tenant_id)
         if await self.platform.has_permission(actor.id, tenant_id, Permission.CLIENTES_CREAR):
             return CompanyScope(organization_id=tenant_id)
-        return CompanyScope(organization_id=tenant_id, engaged_user_id=actor.id)
+        return CompanyScope(organization_id=tenant_id, user_id=actor.id)
 
     # ── Paso 1: buscador de clientes y NIT existente ──────────────────────
 

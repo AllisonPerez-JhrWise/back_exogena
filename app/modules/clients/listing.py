@@ -13,7 +13,7 @@ from sqlalchemy.orm import aliased
 
 from app.core.config import settings
 from app.core.exceptions import BadRequestError
-from app.modules.clients.models import Client, Company, CompanyStatus
+from app.modules.clients.models import Client, ClientUser, Company, CompanyStatus
 from app.modules.engagements.models import Engagement, EngagementStatus
 from app.shared.pagination import PageParams
 
@@ -74,8 +74,8 @@ class CompanyScope:
     """Qué empresas puede ver quien consulta (alcance de la tarea, F0-02)."""
 
     organization_id: UUID | None = None  # la firma: el Administrador ve todas
-    client_id: UUID | None = None  # el Cliente: solo las suyas
-    engaged_user_id: UUID | None = None  # Socio, Gerente: las de sus compromisos
+    # Los demás: las de sus compromisos y las de los clientes a los que están asignados
+    user_id: UUID | None = None
 
 
 @dataclass
@@ -162,21 +162,29 @@ def _scope_conditions(scope: CompanyScope) -> list[ColumnElement[bool]]:
     conditions = []
     if scope.organization_id:
         conditions.append(Company.organization_id == scope.organization_id)
-    if scope.client_id:
-        conditions.append(Company.client_id == scope.client_id)
-    if scope.engaged_user_id:
-        conditions.append(
+    if scope.user_id:
+        in_my_engagements = (
             select(Engagement.id)
             .where(
                 Engagement.company_id == Company.id,
                 Engagement.is_deleted.is_(False),
                 or_(
-                    Engagement.partner_user_id == scope.engaged_user_id,
-                    Engagement.manager_user_id == scope.engaged_user_id,
+                    Engagement.partner_user_id == scope.user_id,
+                    Engagement.manager_user_id == scope.user_id,
                 ),
             )
             .exists()
         )
+        assigned_to_me = (
+            select(ClientUser.id)
+            .where(
+                ClientUser.client_id == Company.client_id,
+                ClientUser.user_id == scope.user_id,
+                ClientUser.is_deleted.is_(False),
+            )
+            .exists()
+        )
+        conditions.append(or_(in_my_engagements, assigned_to_me))
     return conditions
 
 

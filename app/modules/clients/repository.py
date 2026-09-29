@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 
 from app.modules.clients.models import (
     Client,
-    ClientMember,
+    ClientUser,
     Company,
     CompanyRutVersion,
     CompanyTaxResponsibility,
@@ -18,11 +18,6 @@ class ClientRepository(BaseRepository[Client]):
 
     async def get_in_organization(self, client_id: UUID, organization_id: UUID) -> Client | None:
         return await self.get(client_id, Client.organization_id == organization_id)
-
-    async def get_by_tenant(self, tenant_id: UUID) -> Client | None:
-        """El cliente cuya cuenta en la plataforma es ese tenant."""
-        result = await self.session.execute(self.base_query().where(Client.tenant_id == tenant_id))
-        return result.scalars().first()
 
     async def search(
         self, organization_id: UUID, text: str | None, limit: int = 20
@@ -75,11 +70,13 @@ class CompanyRutVersionRepository(BaseRepository[CompanyRutVersion]):
     model = CompanyRutVersion
 
 
-class ClientMemberRepository(BaseRepository[ClientMember]):
-    model = ClientMember
+class ClientUserRepository(BaseRepository[ClientUser]):
+    model = ClientUser
 
-    async def get_by_membership(self, membership_id: UUID) -> ClientMember | None:
+    async def get_by_email(self, client_id: UUID, email: str) -> ClientUser | None:
         result = await self.session.execute(
-            self.base_query().where(ClientMember.membership_id == membership_id)
+            self.base_query().where(
+                ClientUser.client_id == client_id, ClientUser.email == email.lower()
+            )
         )
         return result.scalars().first()

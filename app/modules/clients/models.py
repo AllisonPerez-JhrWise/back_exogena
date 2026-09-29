@@ -1,13 +1,15 @@
-"""Clientes y empresas.
+"""Clientes y empresas, dentro de una organización (la firma).
 
-- Cliente (grupo): la cuenta del cliente en la plataforma (un tenant kind='client'). Sus
-  usuarios entran una vez y ven todas sus empresas. Con una sola empresa, se comporta
-  como ella; con varias, es un grupo (p. ej. "Grupo Muisca").
-- Empresa: una por NIT. Lleva los datos del RUT, que no se editan a mano (si algo está
-  mal, se carga otro RUT), y sus propios datos de contacto y notas, que sí se editan.
+La jerarquía es: Firma (el tenant de la plataforma) → Clientes → Empresas → Compromisos.
+Un cliente NO es un tenant: es un registro de la firma, y los equipos de la firma lo ven.
 
-Ambos pertenecen a una organización (la firma, organization_id). Nada se borra: se
-inactiva con motivo.
+- Cliente (grupo): un nombre que pone quien lo crea (p. ej. "Grupo Sacyr"), con datos de
+  contacto y notas. No tiene NIT. Con una sola empresa, se comporta como ella.
+- Empresa: una por NIT (Sacyr Concesiones, Dique, Pacífico…). Lleva los datos del RUT,
+  que no se editan a mano (si algo está mal, se carga otro RUT), y sus propios datos de
+  contacto y notas, que sí se editan.
+
+Nada se borra: se inactiva con motivo.
 """
 
 from datetime import date
@@ -51,15 +53,12 @@ def _active_unique(name: str, *columns: str, where: str = "NOT is_deleted") -> I
 
 
 class Client(BaseTable):
-    """El cliente o grupo: la cuenta del cliente en la plataforma (1 a 1 con su tenant)."""
+    """El cliente o grupo de empresas de la firma."""
 
     __tablename__ = "clients"
-    __table_args__ = (_active_unique("ux_clients_tenant_id", "tenant_id"),)
 
-    # La firma que atiende al cliente
+    # La firma que atiende al cliente (el tenant de la plataforma)
     organization_id: UUID = Field(foreign_key=platform_fk("tenants"), index=True)
-    # La cuenta del cliente en la plataforma: ahí entran sus usuarios
-    tenant_id: UUID = Field(foreign_key=platform_fk("tenants"))
     name: str = Field(max_length=250, description="Nombre del cliente o del grupo")
     # ── Datos de contacto (editables). Se proponen al agregar empresas al grupo ──
     contact_name: str | None = Field(default=None, max_length=200)
@@ -182,16 +181,28 @@ class CompanyRutVersion(BaseTable):
     file_key: str | None = Field(default=None, max_length=500)
 
 
-class ClientMember(BaseTable):
-    """Datos de una persona del cliente que la plataforma no guarda: su cargo y su celular.
-    La persona y su acceso son la membresía en el tenant del cliente (public.memberships).
+class ClientUser(BaseTable):
+    """Un usuario del cliente (paso 4): quién es, su cargo y su celular en ese cliente.
+
+    Es también la asignación persona ↔ cliente: el rol `cliente` de la plataforma define
+    el menú, y esta asignación define qué clientes ve la persona.
+
+    Crear a la persona y su acceso a la firma lo hace la plataforma (POST /tenant/miembros):
+    mientras no se integra, `user_id` queda vacío y la fila guarda los datos para invitarla.
     El cargo va aquí porque una persona (p. ej. un revisor fiscal) puede estar en varios
     clientes con un cargo distinto en cada uno."""
 
-    __tablename__ = "client_members"
-    __table_args__ = (_active_unique("ux_client_members_membership_id", "membership_id"),)
+    __tablename__ = "client_users"
+    __table_args__ = (
+        # Una persona una sola vez por cliente
+        _active_unique("ux_client_users_client_email", "client_id", "email"),
+        CheckConstraint("email = lower(email)", name="email_lowercase"),
+    )
 
     client_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.clients.id", index=True)
-    membership_id: UUID = Field(foreign_key=platform_fk("memberships"))
-    position: str | None = Field(default=None, max_length=100, description="Cargo en la empresa")
+    email: str = Field(max_length=320)
+    full_name: str = Field(max_length=200)
     phone: str | None = Field(default=None, max_length=30, description="Celular")
+    position: str | None = Field(default=None, max_length=100, description="Cargo en la empresa")
+    # La persona en la plataforma (public.users). Vacío = todavía no invitada
+    user_id: UUID | None = Field(default=None, foreign_key=platform_fk("users"), index=True)
