@@ -2,26 +2,34 @@ from datetime import date, datetime
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, model_validator
 
-from app.modules.clients.models import PersonType, RutStatus
+from app.modules.clients.models import CompanyStatus, PersonType, RutStatus
 from app.modules.clients.nit import calculate_dv
+from app.modules.engagements.schemas import (
+    EngagementIn,
+    EngagementRead,
+    check_no_repeated_engagements,
+)
 from app.shared.models import join_name_parts
 
 ResponsibilityCode = Annotated[str, StringConstraints(pattern=r"^[0-9]{1,2}$")]
 
 
-# ── Entrada: POST /clients ──────────────────────────────────────────────────
+# ── Entrada: POST /clients (asistente "Nuevo cliente") ──────────────────────
 
 
-class ClientRutIn(BaseModel):
-    """Datos del RUT (no editables en el front).
-    Los extrae el microservicio del RUT y llegan a través del front: este servicio no
-    procesa el PDF."""
+class RutIn(BaseModel):
+    """Datos del RUT (no editables en el front). Los extrae el microservicio del RUT y
+    llegan a través del front: este servicio no procesa el PDF."""
 
-    nit: str = Field(pattern=r"^[0-9]{5,15}$", description="Sin dígito de verificación")
+    nit: str = Field(
+        pattern=r"^[0-9]{5,15}$",
+        description="Sin dígito de verificación. En persona natural, el número de identificación",
+    )
     dv: str = Field(pattern=r"^[0-9]$")
     person_type: PersonType
+    taxpayer_type: str | None = Field(default=None, max_length=100)
     # Persona jurídica
     legal_name: str | None = Field(default=None, min_length=1, max_length=250)
     # Persona natural
@@ -33,13 +41,15 @@ class ClientRutIn(BaseModel):
     department_code: str | None = Field(default=None, pattern=r"^[0-9]{2}$")
     city_code: str | None = Field(default=None, pattern=r"^[0-9]{5}$")
     rut_email: EmailStr | None = None
+    rut_phone: str | None = Field(default=None, max_length=30)
     main_activity_code: str | None = Field(default=None, pattern=r"^[0-9]{4}$")
     tax_responsibilities: list[ResponsibilityCode] = Field(default_factory=list)
-    rut_status: RutStatus | None = None
-    rut_updated_at: date | None = None
+    rut_status: RutStatus
+    generated_at: date = Field(description="'Fecha generación documento PDF' (pie del RUT)")
+    rut_updated_at: date | None = Field(default=None, description="Fecha de actualización")
 
     @model_validator(mode="after")
-    def _check_rut(self) -> "ClientRutIn":
+    def _check_rut(self) -> "RutIn":
         if calculate_dv(self.nit) != self.dv:
             raise ValueError("The verification digit (dv) does not match the NIT")
         if self.person_type == PersonType.JURIDICA and not self.legal_name:
@@ -54,14 +64,18 @@ class ClientRutIn(BaseModel):
         return self
 
 
-class ClientOrganizationIn(BaseModel):
-    """Datos de la organización (editables)."""
+class OrganizationDataIn(BaseModel):
+    """Paso 2, datos propios de la organización (editables después)."""
 
     trade_name: str | None = Field(default=None, max_length=250)
+    contact_name: str | None = Field(default=None, max_length=200, description="Contacto principal")
+    contact_email: EmailStr | None = Field(default=None, description="Correo de contacto")
+    contact_phone: str | None = Field(default=None, max_length=30, description="Teléfono")
+    notes: str | None = Field(default=None, max_length=2000)
 
 
 class ClientUserIn(BaseModel):
-    """Una persona del cliente (paso 4). El contacto principal viene del paso 2."""
+    """Paso 4: un usuario del cliente, con acceso a todas sus empresas."""
 
     email: EmailStr
     # La plataforma guarda un solo campo full_name; se arma con estas partes
@@ -69,9 +83,8 @@ class ClientUserIn(BaseModel):
     middle_name: str | None = Field(default=None, max_length=100)
     last_name: str = Field(min_length=1, max_length=100)
     second_last_name: str | None = Field(default=None, max_length=100)
-    phone: str | None = Field(default=None, max_length=30)
+    phone: str | None = Field(default=None, max_length=30, description="Celular")
     position: str | None = Field(default=None, max_length=100, description="Cargo en la empresa")
-    is_primary_contact: bool = False
 
     @property
     def full_name(self) -> str:
@@ -81,28 +94,72 @@ class ClientUserIn(BaseModel):
 
 
 class ClientCreate(BaseModel):
-    """Payload único del formulario "Nuevo cliente"."""
+    """Payload único del asistente "Nuevo cliente". Los pasos 3 y 4 son opcionales."""
 
-    rut: ClientRutIn
-    organization: ClientOrganizationIn = Field(default_factory=ClientOrganizationIn)
-    users: list[ClientUserIn] = Field(min_length=1)
+    # Paso 1: vacío = cliente nuevo; un id = agregar la empresa a ese cliente (grupo)
+    client_id: UUID | None = None
+    rut: RutIn
+    organization: OrganizationDataIn = Field(default_factory=OrganizationDataIn)
+    engagements: list[EngagementIn] = Field(default_factory=list)
+    users: list[ClientUserIn] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _check_users(self) -> "ClientCreate":
+    def _check_lists(self) -> "ClientCreate":
         emails = [user.email.lower() for user in self.users]
         if len(set(emails)) != len(emails):
             raise ValueError("users has repeated emails")
-        # La plataforma crea el tenant con su administrador: el contacto principal
-        if sum(user.is_primary_contact for user in self.users) != 1:
-            raise ValueError("Exactly one user must be the primary contact")
+        check_no_repeated_engagements(self.engagements)
         return self
-
-    @property
-    def primary_contact(self) -> ClientUserIn:
-        return next(user for user in self.users if user.is_primary_contact)
 
 
 # ── Salida ───────────────────────────────────────────────────────────────────
+
+
+class ClientRead(BaseModel):
+    """El cliente o grupo."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    tenant_id: UUID = Field(description="La cuenta del cliente en la plataforma")
+    name: str
+    contact_name: str | None = None
+    contact_email: str | None = None
+    contact_phone: str | None = None
+    notes: str | None = None
+    is_active: bool
+
+
+class CompanyRead(BaseModel):
+    id: UUID
+    client_id: UUID
+    display_name: str = Field(description="Razón social o nombre completo")
+    trade_name: str | None = None
+    contact_name: str | None = None
+    contact_email: str | None = None
+    contact_phone: str | None = None
+    notes: str | None = None
+    nit: str
+    dv: str
+    person_type: PersonType
+    taxpayer_type: str | None = None
+    legal_name: str | None = None
+    first_name: str | None = None
+    middle_name: str | None = None
+    last_name: str | None = None
+    second_last_name: str | None = None
+    address: str | None = None
+    department_code: str | None = None
+    city_code: str | None = None
+    rut_email: str | None = None
+    rut_phone: str | None = None
+    main_activity_code: str | None = None
+    tax_responsibilities: list[str]
+    rut_status: RutStatus | None = None
+    rut_generated_at: date | None = Field(default=None, description="RUT generado")
+    rut_updated_at: date | None = Field(default=None, description="RUT actualizado")
+    is_active: bool
+    created_at: datetime
 
 
 class ClientUserRead(BaseModel):
@@ -110,32 +167,54 @@ class ClientUserRead(BaseModel):
     membership_id: UUID
     email: EmailStr
     full_name: str
-    role: str = Field(description="Rol en el tenant del cliente")
+    role: str = Field(description="Rol en la cuenta del cliente")
     phone: str | None = None
     position: str | None = None
-    is_primary_contact: bool
 
 
-class ClientRead(BaseModel):
+class ClientCreated(BaseModel):
+    """Resultado del asistente: todo lo que se creó en la misma operación."""
+
+    client: ClientRead
+    company: CompanyRead
+    engagements: list[EngagementRead]
+    users: list[ClientUserRead]
+
+
+class ClientSearchItem(BaseModel):
+    """Para el buscador "Agregar a un cliente existente" (paso 1)."""
+
     id: UUID
-    tenant_id: UUID = Field(description="El cliente en la plataforma (public.tenants)")
+    name: str
+    companies: int = Field(description="Número de empresas del cliente")
+    contact_name: str | None = None
+    contact_email: str | None = None
+    contact_phone: str | None = None
+
+
+class CompanyListItem(BaseModel):
+    """Una fila de la pantalla de clientes (una por empresa)."""
+
+    id: UUID
+    client_id: UUID
+    display_name: str = Field(description="Empresa: razón social o nombre completo")
+    trade_name: str | None = None
     nit: str
     dv: str
-    person_type: PersonType
-    display_name: str = Field(description="Razón social o nombre completo")
-    legal_name: str | None = None
-    first_name: str | None = None
-    middle_name: str | None = None
-    last_name: str | None = None
-    second_last_name: str | None = None
-    trade_name: str | None = None
-    address: str | None = None
-    department_code: str | None = None
-    city_code: str | None = None
-    rut_email: str | None = None
-    main_activity_code: str | None = None
-    tax_responsibilities: list[str]
-    rut_status: RutStatus | None = None
-    rut_updated_at: date | None = None
-    users: list[ClientUserRead]
-    created_at: datetime
+    group: str | None = Field(
+        default=None, description="Nombre del cliente, solo si tiene varias empresas"
+    )
+    active_engagements: int = Field(description="Compromisos por iniciar o en curso")
+    rut_generated_at: date | None = Field(default=None, description="RUT generado")
+    rut_updated_at: date | None = Field(default=None, description="RUT actualizado")
+    rut_date_unknown: bool = Field(description="'Fecha del RUT sin identificar'")
+    status: CompanyStatus
+
+
+class NitCheck(BaseModel):
+    """Si el NIT ya está registrado en la organización, no se crea un duplicado."""
+
+    exists: bool
+    company_id: UUID | None = None
+    client_id: UUID | None = None
+    display_name: str | None = None

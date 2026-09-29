@@ -12,6 +12,7 @@ from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ValidationError
 
+from app.core.config import settings
 from app.core.exceptions import UnauthorizedError
 from app.core.security import decode_access_token
 
@@ -29,6 +30,8 @@ async def get_current_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> Principal:
     if not credentials:
+        if settings.auth_bypass:  # solo pruebas locales (ver Settings.auth_bypass)
+            return Principal(id=settings.dev_user_id)
         raise UnauthorizedError()
 
     claims = decode_access_token(credentials.credentials)

@@ -1,3 +1,15 @@
+"""Clientes y empresas.
+
+- Cliente (grupo): la cuenta del cliente en la plataforma (un tenant kind='client'). Sus
+  usuarios entran una vez y ven todas sus empresas. Con una sola empresa, se comporta
+  como ella; con varias, es un grupo (p. ej. "Grupo Muisca").
+- Empresa: una por NIT. Lleva los datos del RUT, que no se editan a mano (si algo está
+  mal, se carga otro RUT), y sus propios datos de contacto y notas, que sí se editan.
+
+Ambos pertenecen a una organización (la firma, organization_id). Nada se borra: se
+inactiva con motivo.
+"""
+
 from datetime import date
 from enum import StrEnum
 from uuid import UUID
@@ -24,22 +36,46 @@ class RutStatus(StrEnum):
     CANCELADO = "cancelado"
 
 
+class CompanyStatus(StrEnum):
+    """Estado que muestra la pantalla de clientes (se calcula, no se guarda)."""
+
+    ACTIVO = "activo"
+    INACTIVO = "inactivo"
+    # RUT generado hace más de rut_renewal_months, o con fecha sin identificar
+    RUT_POR_RENOVAR = "rut_por_renovar"
+
+
+def _active_unique(name: str, *columns: str, where: str = "NOT is_deleted") -> Index:
+    """Índice único solo entre filas no borradas (borrado lógico)."""
+    return Index(name, *columns, unique=True, postgresql_where=text(where))
+
+
 class Client(BaseTable):
-    """Datos del RUT de un cliente. El cliente en sí es un tenant de la plataforma
-    (public.tenants, kind='client'): esta tabla lo complementa, 1 a 1.
-    Los datos del RUT no son editables; `trade_name` sí."""
+    """El cliente o grupo: la cuenta del cliente en la plataforma (1 a 1 con su tenant)."""
 
     __tablename__ = "clients"
+    __table_args__ = (_active_unique("ux_clients_tenant_id", "tenant_id"),)
+
+    # La firma que atiende al cliente
+    organization_id: UUID = Field(foreign_key=platform_fk("tenants"), index=True)
+    # La cuenta del cliente en la plataforma: ahí entran sus usuarios
+    tenant_id: UUID = Field(foreign_key=platform_fk("tenants"))
+    name: str = Field(max_length=250, description="Nombre del cliente o del grupo")
+    # ── Datos de contacto (editables). Se proponen al agregar empresas al grupo ──
+    contact_name: str | None = Field(default=None, max_length=200)
+    contact_email: str | None = Field(default=None, max_length=320)
+    contact_phone: str | None = Field(default=None, max_length=30)
+    notes: str | None = Field(default=None, max_length=2000)
+    inactivation_reason: str | None = Field(default=None, max_length=500)
+
+
+class Company(BaseTable):
+    """Una empresa (un NIT) de un cliente. El trabajo y la obligación son por NIT."""
+
+    __tablename__ = "companies"
     __table_args__ = (
-        # NIT único solo entre clientes no borrados (borrado lógico)
-        Index("ux_clients_nit", "nit", unique=True, postgresql_where=text("NOT is_deleted")),
-        # Un tenant tiene un solo registro de cliente
-        Index(
-            "ux_clients_tenant_id",
-            "tenant_id",
-            unique=True,
-            postgresql_where=text("NOT is_deleted"),
-        ),
+        # El NIT no se repite dentro de la organización (entre empresas no borradas)
+        _active_unique("ux_companies_organization_nit", "organization_id", "nit"),
         CheckConstraint("nit ~ '^[0-9]{5,15}$'", name="nit_digits"),
         CheckConstraint("dv ~ '^[0-9]$'", name="dv_digit"),
         CheckConstraint("person_type IN ('natural', 'juridica')", name="person_type_valid"),
@@ -54,15 +90,25 @@ class Client(BaseTable):
         ),
     )
 
-    tenant_id: UUID = Field(foreign_key=platform_fk("tenants"))
+    client_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.clients.id", index=True)
+    organization_id: UUID = Field(foreign_key=platform_fk("tenants"), index=True)
 
-    # ── Datos del RUT (no editables) ──
-    nit: str = Field(max_length=15, description="NIT sin dígito de verificación")
+    # ── Datos de la organización (editables) ──
+    trade_name: str | None = Field(default=None, max_length=250, description="Nombre comercial")
+    contact_name: str | None = Field(default=None, max_length=200)
+    contact_email: str | None = Field(default=None, max_length=320)
+    contact_phone: str | None = Field(default=None, max_length=30)
+    notes: str | None = Field(default=None, max_length=2000)
+
+    # ── Datos del RUT vigente (no editables; vienen de la última versión cargada) ──
+    # NIT sin DV. En persona natural es el número de identificación
+    nit: str = Field(max_length=15)
     dv: str = Field(max_length=1, description="Dígito de verificación")
     person_type: str = Field(max_length=10)
-    # Persona jurídica
+    taxpayer_type: str | None = Field(
+        default=None, max_length=100, description="Tipo de contribuyente"
+    )
     legal_name: str | None = Field(default=None, max_length=250, description="Razón social")
-    # Persona natural: el nombre separado, como viene en el RUT
     first_name: str | None = Field(default=None, max_length=100)
     middle_name: str | None = Field(default=None, max_length=100)
     last_name: str | None = Field(default=None, max_length=100)
@@ -72,14 +118,15 @@ class Client(BaseTable):
     department_code: str | None = Field(default=None, max_length=2)
     city_code: str | None = Field(default=None, max_length=5)
     rut_email: str | None = Field(default=None, max_length=320)
+    rut_phone: str | None = Field(default=None, max_length=30)
     main_activity_code: str | None = Field(default=None, max_length=4, description="Código CIIU")
     rut_status: str | None = Field(default=None, max_length=20)
+    # Cuándo se descargó el PDF de la DIAN. NULL = "Fecha del RUT sin identificar"
+    rut_generated_at: date | None = None
+    # Cuándo el contribuyente actualizó su RUT: desde cuándo rigen estos datos
     rut_updated_at: date | None = None
-    # Referencia al PDF del RUT, que maneja el microservicio del RUT (se define al integrarse)
-    rut_file_key: str | None = Field(default=None, max_length=500)
 
-    # ── Datos de la organización (editables) ──
-    trade_name: str | None = Field(default=None, max_length=250, description="Nombre comercial")
+    inactivation_reason: str | None = Field(default=None, max_length=500)
 
     @property
     def display_name(self) -> str:
@@ -91,52 +138,60 @@ class Client(BaseTable):
         )
 
 
-class ClientTaxResponsibility(BaseTable):
-    """Responsabilidades tributarias del RUT (05 Renta, 48 IVA, 42 Contabilidad…)."""
+class CompanyTaxResponsibility(BaseTable):
+    """Responsabilidades tributarias del RUT vigente (05 Renta, 48 IVA, 42 Contabilidad…)."""
 
-    __tablename__ = "client_tax_responsibilities"
+    __tablename__ = "company_tax_responsibilities"
     __table_args__ = (
-        Index(
-            "ux_client_tax_responsibilities_client_code",
-            "client_id",
-            "code",
-            unique=True,
-            postgresql_where=text("NOT is_deleted"),
-        ),
+        _active_unique("ux_company_tax_responsibilities_company_code", "company_id", "code"),
         CheckConstraint("code ~ '^[0-9]{1,2}$'", name="code_digits"),
     )
 
-    client_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.clients.id", index=True)
+    company_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.companies.id", index=True)
     code: str = Field(max_length=2)
 
 
-class ClientContact(BaseTable):
-    """Datos de una persona dentro de un cliente que la plataforma no guarda: su cargo, su
-    teléfono de contacto y si es el contacto principal. La persona y su acceso al cliente
-    son la membresía (public.memberships); esta tabla la complementa, 1 a 1.
+def first_covered_tax_year(rut_updated_at: date) -> int:
+    """Año gravable desde el que sirve una versión del RUT: el año de su fecha de
+    actualización, o el anterior si cae el 1 de enero (regla de la tarea)."""
+    if (rut_updated_at.month, rut_updated_at.day) == (1, 1):
+        return rut_updated_at.year - 1
+    return rut_updated_at.year
+
+
+class CompanyRutVersion(BaseTable):
+    """Cada RUT cargado de una empresa. El RUT tiene vigencia: para saber qué formatos
+    aplican a un año gravable se usa la versión vigente en ese año, no la de hoy."""
+
+    __tablename__ = "company_rut_versions"
+    __table_args__ = (
+        CheckConstraint("covers_tax_year BETWEEN 1990 AND 2100", name="covers_tax_year_range"),
+    )
+
+    company_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.companies.id", index=True)
+    # Cuándo se descargó el PDF (valida los 30 días al cargar el RUT actual). NULL = ilegible
+    generated_at: date | None = None
+    # Cuándo el contribuyente actualizó el RUT (dice para qué años gravables sirve)
+    rut_updated_at: date | None = None
+    # first_covered_tax_year(rut_updated_at): cubre ese año gravable y los siguientes
+    covers_tax_year: int | None = None
+    # Histórica: cargada desde la ficha para cubrir un año anterior (sin la regla de 30 días)
+    is_historical: bool = Field(default=False)
+    # Resultado del microservicio del RUT (public.extracciones) y archivo guardado (F0-05)
+    extraction_id: UUID | None = None
+    file_key: str | None = Field(default=None, max_length=500)
+
+
+class ClientMember(BaseTable):
+    """Datos de una persona del cliente que la plataforma no guarda: su cargo y su celular.
+    La persona y su acceso son la membresía en el tenant del cliente (public.memberships).
     El cargo va aquí porque una persona (p. ej. un revisor fiscal) puede estar en varios
     clientes con un cargo distinto en cada uno."""
 
-    __tablename__ = "client_contacts"
-    __table_args__ = (
-        # Una membresía tiene un solo registro de contacto
-        Index(
-            "ux_client_contacts_membership_id",
-            "membership_id",
-            unique=True,
-            postgresql_where=text("NOT is_deleted"),
-        ),
-        # Cada cliente tiene un solo contacto principal
-        Index(
-            "ux_client_contacts_primary_contact",
-            "client_id",
-            unique=True,
-            postgresql_where=text("is_primary_contact AND NOT is_deleted"),
-        ),
-    )
+    __tablename__ = "client_members"
+    __table_args__ = (_active_unique("ux_client_members_membership_id", "membership_id"),)
 
     client_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.clients.id", index=True)
     membership_id: UUID = Field(foreign_key=platform_fk("memberships"))
     position: str | None = Field(default=None, max_length=100, description="Cargo en la empresa")
-    phone: str | None = Field(default=None, max_length=30)
-    is_primary_contact: bool = Field(default=False)
+    phone: str | None = Field(default=None, max_length=30, description="Celular")

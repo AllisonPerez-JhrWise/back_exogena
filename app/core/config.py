@@ -1,6 +1,7 @@
 from enum import StrEnum
 from functools import lru_cache
 from typing import Any
+from uuid import UUID
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -48,6 +49,19 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     # Encabezado con el tenant (organización) en el que trabaja el usuario
     tenant_header: str = "X-Tenant-Id"
+    # SOLO PARA PRUEBAS mientras llegan Cognito y el tenant: sin token se actúa como
+    # dev_user_id, sin X-Tenant-Id se ve todo y no se revisan permisos. Prohibido en producción.
+    auth_bypass: bool = False
+    dev_user_id: UUID = UUID(int=0)
+    # Con AUTH_BYPASS, tenant que se usa si no llega X-Tenant-Id (la firma de `make seed`).
+    # Vacío = sin tenant: se ve todo, pero lo que necesita una organización responde 400.
+    dev_tenant_id: UUID | None = None
+
+    # ── Reglas del RUT (parámetros de la tarea; F0-09 aún no existe en la plataforma) ──
+    # rut.dias_generacion_maxima: antigüedad máxima del PDF al cargar el RUT actual
+    rut_max_generation_days: int = 30
+    # rut.meses_vigencia_compromiso: después de esto la empresa queda "RUT por renovar"
+    rut_renewal_months: int = 12
 
     # ── Front-end (Next.js) ──────────────────────────────────────────────
     # Lista JSON: CORS_ORIGINS=["https://app.example.com"]
@@ -72,6 +86,8 @@ class Settings(BaseSettings):
                 raise ValueError("Database URLs must use the postgresql+asyncpg:// driver")
         if self.is_production and "*" in self.cors_origins:
             raise ValueError("CORS_ORIGINS cannot contain '*' in production")
+        if self.is_production and self.auth_bypass:
+            raise ValueError("AUTH_BYPASS cannot be enabled in production")
         return self
 
 

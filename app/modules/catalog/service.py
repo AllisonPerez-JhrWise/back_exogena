@@ -16,16 +16,16 @@ class CatalogService:
         self.obligations = ObligationRepository(session)
         self.service_types = ServiceTypeRepository(session)
 
-    async def list_obligations(self, tenant_id: UUID) -> list[ObligationRead]:
+    async def list_obligations(self, tenant_id: UUID | None) -> list[ObligationRead]:
         items = await self.obligations.list_active(tenant_id)
         return [ObligationRead.model_validate(item) for item in items]
 
-    async def list_service_types(self, tenant_id: UUID) -> list[ServiceTypeRead]:
+    async def list_service_types(self, tenant_id: UUID | None) -> list[ServiceTypeRead]:
         items = await self.service_types.list_active(tenant_id)
         return [ServiceTypeRead.model_validate(item) for item in items]
 
     async def list_service_types_for(
-        self, tenant_id: UUID, obligation_id: UUID
+        self, tenant_id: UUID | None, obligation_id: UUID
     ) -> list[OfferedServiceTypeRead]:
         # Una obligación inactiva o de otra organización no existe para quien consulta
         if await self.obligations.get_active(tenant_id, obligation_id) is None:

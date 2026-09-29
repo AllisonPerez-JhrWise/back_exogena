@@ -2,8 +2,10 @@ from sqlalchemy import Index
 
 from app.modules.clients.models import (
     Client,
-    ClientContact,
-    ClientTaxResponsibility,
+    ClientMember,
+    Company,
+    CompanyRutVersion,
+    CompanyTaxResponsibility,
     PersonType,
 )
 from app.modules.clients.schemas import ClientUserIn
@@ -36,7 +38,7 @@ def own_tables():
 
 def test_own_tables_live_in_service_schema():
     # También con __table_args__ en forma de tupla (índices y checks)
-    for model in (Client, ClientTaxResponsibility, ClientContact, Note):
+    for model in (Client, Company, CompanyTaxResponsibility, CompanyRutVersion, ClientMember, Note):
         assert model.__table__.schema == DB_SCHEMA
     for model in (User, Tenant, Membership):
         assert model.__table__.schema is None  # schema por defecto (public)
@@ -75,10 +77,10 @@ def test_platform_full_name_is_built_from_parts():
 
 
 def test_client_display_name_depends_on_person_type():
-    empresa = Client(
+    empresa = Company(
         nit="900123456", dv="4", person_type=PersonType.JURIDICA, legal_name="Andina SAS"
     )
-    persona = Client(
+    persona = Company(
         nit="1020304050",
         dv="1",
         person_type=PersonType.NATURAL,

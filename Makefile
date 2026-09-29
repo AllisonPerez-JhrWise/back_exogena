@@ -31,7 +31,7 @@ COMPOSE_TEST := docker compose -f docker-compose.test.yml
 # en Windows, make le pasa cada comando a sh con la codificacion antigua y se dañan.
 
 .PHONY: help up down restart status logs shell psql reset migrate migration db-check \
-        aws-status aws-sql aws-migrate db-sync-cloud test venv test-unit lint format clean check-docker
+        seed aws-status aws-sql aws-migrate aws-seed-catalog db-sync-cloud test venv test-unit lint format clean check-docker
 
 help: ## Muestra los comandos disponibles
 	@printf "\n$(BOLD)Comandos disponibles$(RESET)  (uso: make <comando>)\n"
@@ -90,12 +90,16 @@ migration: ## Crea una migración nueva. Uso: make migration m="agregar terceros
 db-check: ## Verifica que los modelos y las migraciones coincidan
 	docker compose exec app alembic check
 
+seed: ## Base LOCAL lista para probar: firma, administrador, catalogo y token para /docs
+	docker compose exec app python -m scripts.seed_local
+
 ##@ AWS (usa .env.aws)
 
 # Misma imagen de la app, pero con la conexión de .env.aws. MSYS_NO_PATHCONV evita que
 # Git Bash en Windows convierta /app en una ruta de Windows.
+# AUTH_BYPASS=false: el .env local (montado con el código) lo tiene encendido para pruebas
 AWS_RUN := MSYS_NO_PATHCONV=1 docker run --rm --env-file .env.aws -e PYTHONPATH=/app \
-  -v "$(CURDIR):/app" -w /app back-exogena
+  -e AUTH_BYPASS=false -v "$(CURDIR):/app" -w /app back-exogena
 AWS_ALEMBIC := $(AWS_RUN) alembic
 DB_INIT := docker/db-init
 
@@ -112,6 +116,16 @@ aws-migrate: check-docker .env.aws ## ⚠ Aplica las migraciones en la base de A
 	    $(AWS_ALEMBIC) upgrade head; \
 	  else \
 	    echo "Cancelado. No se aplico nada."; \
+	  fi
+
+aws-seed-catalog: check-docker .env.aws ## ⚠ Carga el catalogo inicial en AWS. Uso: make aws-seed-catalog tenant=<uuid>
+	@if [ -z "$(tenant)" ]; then printf "$(YELLOW)Uso: make aws-seed-catalog tenant=<uuid de la firma>$(RESET)\n"; exit 1; fi
+	@printf "$(RED)Esto escribe en la base de datos de AWS (tenant $(tenant)).$(RESET) Continuar? [s/N] "; \
+	  read ans; ans=$$(printf '%s' "$$ans" | tr -cd 'a-zA-Z'); \
+	  if [ "$$ans" = "s" ] || [ "$$ans" = "S" ]; then \
+	    $(AWS_RUN) python -m scripts.seed_catalog --tenant-id $(tenant); \
+	  else \
+	    echo "Cancelado. No se cargo nada."; \
 	  fi
 
 db-sync-cloud: check-docker .env.aws ## Solo lectura: copia de AWS la estructura de public y los catalogos

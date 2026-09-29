@@ -6,7 +6,9 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from app.core.config import Settings, settings
 from app.modules.catalog.models import Obligation, ObligationNature, Service, ServiceType
+from app.modules.catalog.seed import seed_catalog
 from tests.integration.conftest import auth_headers
 
 
@@ -124,6 +126,73 @@ async def test_requires_membership_in_the_tenant(client, platform, firm):
     for url in ("/api/v1/obligations", "/api/v1/service-types"):
         assert (await client.get(url)).status_code == 401
         assert (await client.get(url, headers=outsider)).status_code == 403
+
+
+# ── Modo de pruebas (AUTH_BYPASS) ──
+
+
+@pytest.fixture
+def auth_bypass(monkeypatch):
+    monkeypatch.setattr(settings, "auth_bypass", True)
+    # Sin firma por defecto (aunque el .env local tenga DEV_TENANT_ID): se ve todo
+    monkeypatch.setattr(settings, "dev_tenant_id", None)
+
+
+async def test_bypass_shows_everything_without_token_or_tenant(
+    client, auth_bypass, catalog, platform, db_session
+):
+    await catalog.obligation("Información exógena")
+    await Catalog(db_session, await platform.tenant("otra-firma")).obligation("Otra")
+
+    response = await client.get("/api/v1/obligations")
+
+    assert response.status_code == 200, response.text
+    assert [o["name"] for o in response.json()["data"]] == ["Información exógena", "Otra"]
+
+
+async def test_bypass_still_checks_a_tenant_when_it_is_sent(client, auth_bypass, platform, firm):
+    outsider = auth_headers(await platform.user("externo@x.co"), firm)
+    assert (await client.get("/api/v1/obligations", headers=outsider)).status_code == 403
+
+
+def test_bypass_is_forbidden_in_production():
+    with pytest.raises(ValueError, match="AUTH_BYPASS"):
+        Settings(
+            environment="production",
+            auth_bypass=True,
+            database_url="postgresql+asyncpg://u:p@h/db",
+            jwt_secret="x" * 32,
+        )
+
+
+# ── Catálogo inicial de la firma ──
+
+
+async def test_initial_catalog_can_be_loaded_twice(client, asociado, db_session, firm):
+    first = await seed_catalog(db_session, firm)
+    await db_session.commit()
+    again = await seed_catalog(db_session, firm)
+    await db_session.commit()
+
+    assert (first.obligations, first.service_types, first.services) == (3, 2, 3)
+    assert (again.obligations, again.service_types, again.services) == (0, 0, 0)
+
+    obligations = (await client.get("/api/v1/obligations", headers=asociado)).json()["data"]
+    assert [o["name"] for o in obligations] == [
+        "Declaración de renta y complementarios",
+        "Información exógena",
+        "Precios de transferencia",
+    ]
+    offered = {}
+    for obligation in obligations:
+        url = f"/api/v1/obligations/{obligation['id']}/service-types"
+        types = (await client.get(url, headers=asociado)).json()["data"]
+        offered[obligation["name"]] = [t["name"] for t in types]
+    assert offered == {
+        "Declaración de renta y complementarios": ["Revisión"],
+        "Información exógena": ["Elaboración", "Revisión"],
+        "Precios de transferencia": [],
+    }
 
 
 # ── Reglas de la base de datos ──
