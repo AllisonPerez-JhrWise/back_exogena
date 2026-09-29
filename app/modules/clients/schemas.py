@@ -9,11 +9,13 @@ from app.modules.clients.nit import calculate_dv
 from app.modules.engagements.schemas import (
     EngagementIn,
     EngagementRead,
+    PersonRef,
     check_no_repeated_engagements,
 )
 from app.shared.models import join_name_parts
 
 ResponsibilityCode = Annotated[str, StringConstraints(pattern=r"^[0-9]{1,2}$")]
+GroupName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=250)]
 
 
 # ── Entrada: POST /clients (asistente "Nuevo cliente") ──────────────────────
@@ -74,8 +76,8 @@ class OrganizationDataIn(BaseModel):
     notes: str | None = Field(default=None, max_length=2000)
 
 
-class ClientUserIn(BaseModel):
-    """Paso 4: un usuario del cliente, con acceso a todas sus empresas."""
+class CompanyUserIn(BaseModel):
+    """Paso 4: un usuario del cliente. Ve solo esta empresa."""
 
     email: EmailStr
     # La plataforma guarda un solo campo full_name; se arma con estas partes
@@ -96,20 +98,19 @@ class ClientUserIn(BaseModel):
 class ClientCreate(BaseModel):
     """Payload único del asistente "Nuevo cliente". Los pasos 3 y 4 son opcionales."""
 
-    # Paso 1: vacío = cliente nuevo; un id = agregar la empresa a ese cliente (grupo)
-    client_id: UUID | None = None
-    # Solo para un cliente nuevo: el nombre del grupo (p. ej. "Grupo Sacyr"). Vacío = el
-    # nombre de la empresa (un cliente con una sola empresa se comporta como ella)
-    client_name: str | None = Field(default=None, min_length=1, max_length=250)
+    # Paso 1, grupo (opcional): uno existente del catálogo (group_id) o uno nuevo
+    # (group_name). Ninguno = la empresa no pertenece a un grupo.
+    group_id: UUID | None = None
+    group_name: GroupName | None = None
     rut: RutIn
     organization: OrganizationDataIn = Field(default_factory=OrganizationDataIn)
     engagements: list[EngagementIn] = Field(default_factory=list)
-    users: list[ClientUserIn] = Field(default_factory=list)
+    users: list[CompanyUserIn] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_lists(self) -> "ClientCreate":
-        if self.client_id and self.client_name:
-            raise ValueError("client_name only applies to a new client (without client_id)")
+        if self.group_id and self.group_name:
+            raise ValueError("Send group_id (existing group) or group_name (new group), not both")
         emails = [user.email.lower() for user in self.users]
         if len(set(emails)) != len(emails):
             raise ValueError("users has repeated emails")
@@ -117,26 +118,28 @@ class ClientCreate(BaseModel):
         return self
 
 
+class GroupIn(BaseModel):
+    name: GroupName
+
+
 # ── Salida ───────────────────────────────────────────────────────────────────
 
 
-class ClientRead(BaseModel):
-    """El cliente o grupo."""
-
+class GroupRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    name: str = Field(description="Nombre del cliente o del grupo")
-    contact_name: str | None = None
-    contact_email: str | None = None
-    contact_phone: str | None = None
-    notes: str | None = None
+    name: str
     is_active: bool
+
+
+class GroupListItem(GroupRead):
+    companies: int = Field(description="Número de empresas del grupo")
 
 
 class CompanyRead(BaseModel):
     id: UUID
-    client_id: UUID
+    group: GroupRead | None = None
     display_name: str = Field(description="Razón social o nombre completo")
     trade_name: str | None = None
     contact_name: str | None = None
@@ -166,7 +169,7 @@ class CompanyRead(BaseModel):
     created_at: datetime
 
 
-class ClientUserRead(BaseModel):
+class CompanyUserRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
@@ -183,35 +186,21 @@ class ClientUserRead(BaseModel):
 class ClientCreated(BaseModel):
     """Resultado del asistente: todo lo que se creó en la misma operación."""
 
-    client: ClientRead
     company: CompanyRead
     engagements: list[EngagementRead]
-    users: list[ClientUserRead]
-
-
-class ClientSearchItem(BaseModel):
-    """Para el buscador "Agregar a un cliente existente" (paso 1)."""
-
-    id: UUID
-    name: str
-    companies: int = Field(description="Número de empresas del cliente")
-    contact_name: str | None = None
-    contact_email: str | None = None
-    contact_phone: str | None = None
+    users: list[CompanyUserRead]
 
 
 class CompanyListItem(BaseModel):
     """Una fila de la pantalla de clientes (una por empresa)."""
 
     id: UUID
-    client_id: UUID
     display_name: str = Field(description="Empresa: razón social o nombre completo")
     trade_name: str | None = None
     nit: str
     dv: str
-    group: str | None = Field(
-        default=None, description="Nombre del cliente, solo si tiene varias empresas"
-    )
+    group_id: UUID | None = None
+    group: str | None = Field(default=None, description="Nombre del grupo, si pertenece a uno")
     active_engagements: int = Field(description="Compromisos por iniciar o en curso")
     rut_generated_at: date | None = Field(default=None, description="RUT generado")
     rut_updated_at: date | None = Field(default=None, description="RUT actualizado")
@@ -219,10 +208,52 @@ class CompanyListItem(BaseModel):
     status: CompanyStatus
 
 
+class RutVersionRead(BaseModel):
+    """Una versión del RUT de la empresa, con los años gravables que cubre."""
+
+    id: UUID
+    generated_at: date | None = Field(default=None, description="Fecha de generación del PDF")
+    rut_updated_at: date | None = Field(default=None, description="Fecha de actualización")
+    covers_from_year: int | None = Field(
+        default=None, description="Primer año gravable que cubre (según la actualización)"
+    )
+    covers_to_year: int | None = Field(
+        default=None,
+        description="Último año gravable que cubre; vacío = hasta hoy (es la más reciente)",
+    )
+    is_historical: bool
+    uploaded_by: PersonRef | None = Field(default=None, description="Quién la cargó")
+    uploaded_at: datetime = Field(description="Cuándo se cargó")
+
+
+class GroupCompanyItem(BaseModel):
+    """Otra empresa del mismo grupo."""
+
+    id: UUID
+    display_name: str
+    nit: str
+    dv: str
+    status: CompanyStatus
+
+
+class CompanyDetail(BaseModel):
+    """Ficha de la empresa."""
+
+    company: CompanyRead
+    status: CompanyStatus
+    rut_date_unknown: bool = Field(description="'Fecha del RUT sin identificar'")
+    group_companies: list[GroupCompanyItem] = Field(
+        description="Las demás empresas del grupo (vacío si no tiene grupo)"
+    )
+    engagements: list[EngagementRead]
+    rut_versions: list[RutVersionRead] = Field(description="De la más reciente a la más antigua")
+    users: list[CompanyUserRead]
+
+
 class NitCheck(BaseModel):
     """Si el NIT ya está registrado en la organización, no se crea un duplicado."""
 
     exists: bool
     company_id: UUID | None = None
-    client_id: UUID | None = None
+    group_id: UUID | None = None
     display_name: str | None = None

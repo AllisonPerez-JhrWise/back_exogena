@@ -7,13 +7,12 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, Query
-from sqlalchemy import ColumnElement, Select, and_, case, func, or_, select
+from sqlalchemy import ColumnElement, Select, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 
 from app.core.config import settings
 from app.core.exceptions import BadRequestError
-from app.modules.clients.models import Client, ClientUser, Company, CompanyStatus
+from app.modules.clients.models import Company, CompanyStatus, CompanyUser, Group
 from app.modules.engagements.models import Engagement, EngagementStatus
 from app.shared.pagination import PageParams
 
@@ -32,11 +31,13 @@ class CompanyFilters:
 
     company: str | None = None
     nit: str | None = None
-    client_id: UUID | None = None
+    group_id: UUID | None = None
     group: str | None = None
     engagements_min: int | None = None
     engagements_max: int | None = None
     statuses: list[CompanyStatus] = field(default_factory=list)
+    # Uso interno (ficha de la empresa): no es un filtro de la pantalla
+    company_id: UUID | None = None
 
 
 def get_company_filters(
@@ -44,7 +45,7 @@ def get_company_filters(
         str | None, Query(max_length=100, description="Nombre de la empresa")
     ] = None,
     nit: Annotated[str | None, Query(pattern=r"^[0-9]{1,15}$", description="NIT o parte")] = None,
-    client_id: Annotated[UUID | None, Query(description="Grupo: empresas de este cliente")] = None,
+    group_id: Annotated[UUID | None, Query(description="Filtro Grupo: empresas del grupo")] = None,
     group: Annotated[str | None, Query(max_length=100, description="Nombre del grupo")] = None,
     engagements_min: Annotated[int | None, Query(ge=0, description="Compromisos activos")] = None,
     engagements_max: Annotated[int | None, Query(ge=0)] = None,
@@ -58,7 +59,7 @@ def get_company_filters(
     return CompanyFilters(
         company=company,
         nit=nit,
-        client_id=client_id,
+        group_id=group_id,
         group=group,
         engagements_min=engagements_min,
         engagements_max=engagements_max,
@@ -74,7 +75,7 @@ class CompanyScope:
     """Qué empresas puede ver quien consulta (alcance de la tarea, F0-02)."""
 
     organization_id: UUID | None = None  # la firma: el Administrador ve todas
-    # Los demás: las de sus compromisos y las de los clientes a los que están asignados
+    # Los demás: las de sus compromisos y las que tienen asignadas
     user_id: UUID | None = None
 
 
@@ -101,12 +102,6 @@ def _display_name():
 
 
 def _columns():
-    sibling = aliased(Company)
-    group_size = (
-        select(func.count(sibling.id))
-        .where(sibling.client_id == Company.client_id, sibling.is_deleted.is_(False))
-        .scalar_subquery()
-    )
     active_engagements = (
         select(func.count(Engagement.id))
         .where(
@@ -118,18 +113,14 @@ def _columns():
     )
     renewal_limit = func.current_date() - func.make_interval(0, settings.rut_renewal_months)
     status = case(
-        (
-            or_(Company.is_active.is_(False), Client.is_active.is_(False)),
-            CompanyStatus.INACTIVO.value,
-        ),
+        (Company.is_active.is_(False), CompanyStatus.INACTIVO.value),
         (
             or_(Company.rut_generated_at.is_(None), Company.rut_generated_at < renewal_limit),
             CompanyStatus.RUT_POR_RENOVAR.value,
         ),
         else_=CompanyStatus.ACTIVO.value,
     )
-    group = case((group_size > 1, Client.name), else_=None)
-    return group, active_engagements, status
+    return Group.name, active_engagements, status
 
 
 SORTABLE = ("name", "nit", "group", "active_engagements", "rut_generated_at", "rut_updated_at")
@@ -141,8 +132,9 @@ async def list_companies(
     group, active_engagements, status = _columns()
     query: Select = (
         select(Company, group, active_engagements, status)
-        .join(Client, Client.id == Company.client_id)
-        .where(Company.is_deleted.is_(False), Client.is_deleted.is_(False))
+        # El grupo es opcional: las empresas sin grupo también se listan
+        .outerjoin(Group, Group.id == Company.group_id)
+        .where(Company.is_deleted.is_(False))
     )
     query = query.where(
         *_scope_conditions(scope), *_filter_conditions(filters, group, active_engagements, status)
@@ -176,11 +168,11 @@ def _scope_conditions(scope: CompanyScope) -> list[ColumnElement[bool]]:
             .exists()
         )
         assigned_to_me = (
-            select(ClientUser.id)
+            select(CompanyUser.id)
             .where(
-                ClientUser.client_id == Company.client_id,
-                ClientUser.user_id == scope.user_id,
-                ClientUser.is_deleted.is_(False),
+                CompanyUser.company_id == Company.id,
+                CompanyUser.user_id == scope.user_id,
+                CompanyUser.is_deleted.is_(False),
             )
             .exists()
         )
@@ -190,15 +182,17 @@ def _scope_conditions(scope: CompanyScope) -> list[ColumnElement[bool]]:
 
 def _filter_conditions(filters: CompanyFilters, group, active_engagements, status):
     conditions = []
+    if filters.company_id:
+        conditions.append(Company.id == filters.company_id)
     if filters.company:
         pattern = f"%{filters.company.strip()}%"
         conditions.append(or_(_display_name().ilike(pattern), Company.trade_name.ilike(pattern)))
     if filters.nit:
         conditions.append(Company.nit.contains(filters.nit))
-    if filters.client_id:
-        conditions.append(Company.client_id == filters.client_id)
+    if filters.group_id:
+        conditions.append(Company.group_id == filters.group_id)
     if filters.group:
-        conditions.append(and_(group.is_not(None), Client.name.ilike(f"%{filters.group.strip()}%")))
+        conditions.append(Group.name.ilike(f"%{filters.group.strip()}%"))
     if filters.engagements_min is not None:
         conditions.append(active_engagements >= filters.engagements_min)
     if filters.engagements_max is not None:

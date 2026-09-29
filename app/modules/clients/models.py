@@ -1,17 +1,17 @@
-"""Clientes y empresas, dentro de una organización (la firma).
+"""Registro de clientes, dentro de una organización (la firma, el tenant de la plataforma).
 
-La jerarquía es: Firma (el tenant de la plataforma) → Clientes → Empresas → Compromisos.
-Un cliente NO es un tenant: es un registro de la firma, y los equipos de la firma lo ven.
-
-- Cliente (grupo): un nombre que pone quien lo crea (p. ej. "Grupo Sacyr"), con datos de
-  contacto y notas. No tiene NIT. Con una sola empresa, se comporta como ella.
-- Empresa: una por NIT (Sacyr Concesiones, Dique, Pacífico…). Lleva los datos del RUT,
-  que no se editan a mano (si algo está mal, se carga otro RUT), y sus propios datos de
-  contacto y notas, que sí se editan.
+- Empresa: cada cliente, uno por NIT (Sacyr Concesiones, Dique, Pacífico…). Lleva los
+  datos del RUT, que no se editan a mano (si algo está mal, se carga otro RUT), y sus
+  propios datos de contacto y notas, que sí se editan.
+- Grupo: opcional, junta varias empresas de un mismo cliente (p. ej. "Grupo Sacyr"). Es
+  solo un nombre, sin NIT. Se elige de un catálogo de la firma, o se agrega si no está:
+  así nadie escribe dos veces el mismo grupo con otra ortografía.
 
 Nada se borra: se inactiva con motivo.
 """
 
+import re
+import unicodedata
 from datetime import date
 from enum import StrEnum
 from uuid import UUID
@@ -52,24 +52,34 @@ def _active_unique(name: str, *columns: str, where: str = "NOT is_deleted") -> I
     return Index(name, *columns, unique=True, postgresql_where=text(where))
 
 
-class Client(BaseTable):
-    """El cliente o grupo de empresas de la firma."""
+def group_name_key(name: str) -> str:
+    """Clave para comparar nombres de grupo: sin tildes, en minúsculas y con un solo
+    espacio entre palabras. "  GRUPO   Sacýr " y "Grupo Sacyr" son el mismo grupo."""
+    sin_tildes = "".join(
+        c for c in unicodedata.normalize("NFKD", name) if not unicodedata.combining(c)
+    )
+    return re.sub(r"\s+", " ", sin_tildes).strip().lower()
 
-    __tablename__ = "clients"
 
-    # La firma que atiende al cliente (el tenant de la plataforma)
+class Group(BaseTable):
+    """Catálogo de grupos de la firma: junta varias empresas de un mismo cliente."""
+
+    __tablename__ = "groups"
+    __table_args__ = (
+        # El mismo grupo no se repite en la firma, aunque se escriba distinto
+        _active_unique("ux_groups_organization_name_key", "organization_id", "name_key"),
+    )
+
+    # La firma (el tenant de la plataforma)
     organization_id: UUID = Field(foreign_key=platform_fk("tenants"), index=True)
-    name: str = Field(max_length=250, description="Nombre del cliente o del grupo")
-    # ── Datos de contacto (editables). Se proponen al agregar empresas al grupo ──
-    contact_name: str | None = Field(default=None, max_length=200)
-    contact_email: str | None = Field(default=None, max_length=320)
-    contact_phone: str | None = Field(default=None, max_length=30)
-    notes: str | None = Field(default=None, max_length=2000)
+    name: str = Field(max_length=250, description="Como lo escribió quien lo creó")
+    # group_name_key(name): lo que se compara para no repetir el grupo
+    name_key: str = Field(max_length=250)
     inactivation_reason: str | None = Field(default=None, max_length=500)
 
 
 class Company(BaseTable):
-    """Una empresa (un NIT) de un cliente. El trabajo y la obligación son por NIT."""
+    """Un cliente: una empresa (un NIT). El trabajo y la obligación son por NIT."""
 
     __tablename__ = "companies"
     __table_args__ = (
@@ -89,8 +99,9 @@ class Company(BaseTable):
         ),
     )
 
-    client_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.clients.id", index=True)
     organization_id: UUID = Field(foreign_key=platform_fk("tenants"), index=True)
+    # Vacío = la empresa no pertenece a ningún grupo
+    group_id: UUID | None = Field(default=None, foreign_key=f"{DB_SCHEMA}.groups.id", index=True)
 
     # ── Datos de la organización (editables) ──
     trade_name: str | None = Field(default=None, max_length=250, description="Nombre comercial")
@@ -181,25 +192,26 @@ class CompanyRutVersion(BaseTable):
     file_key: str | None = Field(default=None, max_length=500)
 
 
-class ClientUser(BaseTable):
-    """Un usuario del cliente (paso 4): quién es, su cargo y su celular en ese cliente.
+class CompanyUser(BaseTable):
+    """Un usuario del cliente (paso 4): quién es, su cargo y su celular en esa empresa.
 
-    Es también la asignación persona ↔ cliente: el rol `cliente` de la plataforma define
-    el menú, y esta asignación define qué clientes ve la persona.
+    Ve solo esa empresa, aunque pertenezca a un grupo; se le pueden dar otras después.
+    Es la asignación persona ↔ empresa: el rol `cliente` de la plataforma define el menú, y
+    esta asignación, qué empresas ve.
 
-    Crear a la persona y su acceso a la firma lo hace la plataforma (POST /tenant/miembros):
-    mientras no se integra, `user_id` queda vacío y la fila guarda los datos para invitarla.
-    El cargo va aquí porque una persona (p. ej. un revisor fiscal) puede estar en varios
-    clientes con un cargo distinto en cada uno."""
+    Crear a la persona y su acceso a la firma lo hace Identidad (POST
+    /organizacion/miembros): mientras no se integra, `user_id` queda vacío y la fila guarda
+    los datos para invitarla. El cargo va aquí porque una persona (p. ej. un revisor
+    fiscal) puede estar en varias empresas con un cargo distinto en cada una."""
 
-    __tablename__ = "client_users"
+    __tablename__ = "company_users"
     __table_args__ = (
-        # Una persona una sola vez por cliente
-        _active_unique("ux_client_users_client_email", "client_id", "email"),
+        # Una persona una sola vez por empresa
+        _active_unique("ux_company_users_company_email", "company_id", "email"),
         CheckConstraint("email = lower(email)", name="email_lowercase"),
     )
 
-    client_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.clients.id", index=True)
+    company_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.companies.id", index=True)
     email: str = Field(max_length=320)
     full_name: str = Field(max_length=200)
     phone: str | None = Field(default=None, max_length=30, description="Celular")

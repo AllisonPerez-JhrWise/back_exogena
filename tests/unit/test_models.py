@@ -1,14 +1,14 @@
 from sqlalchemy import Index
 
 from app.modules.clients.models import (
-    Client,
-    ClientUser,
     Company,
     CompanyRutVersion,
     CompanyTaxResponsibility,
+    CompanyUser,
+    Group,
     PersonType,
 )
-from app.modules.clients.schemas import ClientUserIn
+from app.modules.clients.schemas import CompanyUserIn
 from app.modules.notes.models import Note
 from app.modules.platform.models import Membership, Tenant, User
 from app.shared.models import (
@@ -38,7 +38,7 @@ def own_tables():
 
 def test_own_tables_live_in_service_schema():
     # También con __table_args__ en forma de tupla (índices y checks)
-    for model in (Client, Company, CompanyTaxResponsibility, CompanyRutVersion, ClientUser, Note):
+    for model in (Company, CompanyTaxResponsibility, CompanyRutVersion, CompanyUser, Group, Note):
         assert model.__table__.schema == DB_SCHEMA
     for model in (User, Tenant, Membership):
         assert model.__table__.schema is None  # schema por defecto (public)
@@ -70,7 +70,7 @@ def test_join_name_parts_skips_empty_parts():
 
 
 def test_platform_full_name_is_built_from_parts():
-    user = ClientUserIn(
+    user = CompanyUserIn(
         email="p@x.co", first_name="Paula", last_name="Córdoba", second_last_name="Ruiz"
     )
     assert user.full_name == "Paula Córdoba Ruiz"

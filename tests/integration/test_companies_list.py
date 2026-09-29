@@ -7,7 +7,7 @@ from uuid import UUID
 import pytest
 from sqlalchemy import text, update
 
-from app.modules.clients.models import ClientUser, Company
+from app.modules.clients.models import Company, CompanyUser
 from app.modules.clients.nit import calculate_dv
 from app.modules.platform.models import SystemRole
 from tests.integration.conftest import auth_headers
@@ -49,9 +49,15 @@ async def screen(client, admin, team, db_session) -> Screen:  # noqa: F811
         engagements=[engagement(team)],
         users=[],
     )
-    muisca = await create(client, admin, rut=rut("901223884", "Textiles Muisca SAS"), users=[])
+    muisca = await create(
+        client,
+        admin,
+        group_name="Grupo Muisca",
+        rut=rut("901223884", "Textiles Muisca SAS"),
+        users=[],
+    )
     zona_franca = await create(
-        client, admin, client_id=muisca["client"]["id"], rut=OTHER_COMPANY_RUT, users=[]
+        client, admin, group_id=muisca["company"]["group"]["id"], rut=OTHER_COMPANY_RUT, users=[]
     )
     importadora = await create(
         client, admin, rut=rut("830456789", "Importadora Andes SAS"), users=[]
@@ -96,13 +102,13 @@ async def test_admin_sees_every_company_of_the_organization(client, admin, scree
     assert (andina["nit"], andina["dv"], andina["group"], andina["active_engagements"]) == (
         "900123456",
         "8",
-        None,  # un cliente con una sola empresa no muestra grupo
+        None,  # sin grupo
         1,
     )
     assert andina["status"] == "activo"
-    # Las dos empresas del grupo muestran el nombre del cliente
-    assert items["Textiles Muisca SAS"]["group"] == "Textiles Muisca SAS"
-    assert items["Andina Zona Franca SAS"]["group"] == "Textiles Muisca SAS"
+    # Las dos empresas del grupo muestran su nombre
+    assert items["Textiles Muisca SAS"]["group"] == "Grupo Muisca"
+    assert items["Andina Zona Franca SAS"]["group"] == "Grupo Muisca"
     # Estados calculados
     assert items["Importadora Andes SAS"]["status"] == "rut_por_renovar"
     servicios = items["Muisca Servicios SAS"]
@@ -116,7 +122,7 @@ async def test_admin_sees_every_company_of_the_organization(client, admin, scree
         ({"company": "muisca"}, ["Muisca Servicios SAS", "Textiles Muisca SAS"]),
         ({"company": "Andina Comercial"}, ["Comercializadora Andina SAS"]),  # nombre comercial
         ({"nit": "9012"}, ["Textiles Muisca SAS"]),
-        ({"group": "textiles"}, ["Andina Zona Franca SAS", "Textiles Muisca SAS"]),
+        ({"group": "MUISCA"}, ["Andina Zona Franca SAS", "Textiles Muisca SAS"]),
         ({"engagements_min": 1}, ["Comercializadora Andina SAS"]),
         ({"status": "rut_por_renovar,inactivo"}, [
             "Distribuidora del Norte SAS", "Importadora Andes SAS", "Muisca Servicios SAS",
@@ -130,9 +136,9 @@ async def test_filters(client, admin, screen, params, expected):
     ] == expected
 
 
-async def test_filter_by_client_shows_the_group_together(client, admin, screen):
+async def test_filter_by_group_shows_its_companies_together(client, admin, screen):
     response = await client.get(
-        URL, params={"client_id": screen.muisca["client"]["id"]}, headers=admin
+        URL, params={"group_id": screen.muisca["company"]["group"]["id"]}, headers=admin
     )
     assert [row["display_name"] for row in rows(response)] == [
         "Andina Zona Franca SAS",
@@ -167,16 +173,14 @@ async def test_associate_without_engagements_sees_nothing(client, screen, staff)
     assert rows(await client.get(URL, headers=asociado)) == []
 
 
-async def test_client_user_sees_only_the_companies_of_its_client(
-    client, screen, platform, firm, db_session
-):
-    """El usuario del cliente tiene su acceso en la firma (rol cliente) y ve las empresas de
-    los clientes a los que está asignado (client_users)."""
+async def test_client_user_sees_only_its_company(client, screen, platform, firm, db_session):
+    """El usuario del cliente tiene su acceso en la firma (rol cliente) y ve solo las
+    empresas que tiene asignadas (company_users), aunque estén en un grupo."""
     laura = await platform.user("laura@muisca.co")
     await platform.member(laura, firm, SystemRole.CLIENTE)
     db_session.add(
-        ClientUser(
-            client_id=UUID(screen.muisca["client"]["id"]),
+        CompanyUser(
+            company_id=UUID(screen.muisca["company"]["id"]),
             email="laura@muisca.co",
             full_name="Laura",
             user_id=laura,
@@ -185,10 +189,8 @@ async def test_client_user_sees_only_the_companies_of_its_client(
     await db_session.commit()
 
     response = await client.get(URL, headers=auth_headers(laura, firm))
-    assert [row["display_name"] for row in rows(response)] == [
-        "Andina Zona Franca SAS",
-        "Textiles Muisca SAS",
-    ]
+    # Textiles Muisca SAS está en el grupo con Andina Zona Franca SAS, que no ve
+    assert [row["display_name"] for row in rows(response)] == ["Textiles Muisca SAS"]
 
 
 async def test_requires_clientes_leer(client, screen, platform, firm):

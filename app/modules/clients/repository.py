@@ -4,51 +4,50 @@ from uuid import UUID
 from sqlalchemy import func, select
 
 from app.modules.clients.models import (
-    Client,
-    ClientUser,
     Company,
     CompanyRutVersion,
     CompanyTaxResponsibility,
+    CompanyUser,
+    Group,
+    group_name_key,
 )
 from app.shared.repository import BaseRepository
 
 
-class ClientRepository(BaseRepository[Client]):
-    model = Client
+class GroupRepository(BaseRepository[Group]):
+    model = Group
 
-    async def get_in_organization(self, client_id: UUID, organization_id: UUID) -> Client | None:
-        return await self.get(client_id, Client.organization_id == organization_id)
+    async def get_in_organization(self, group_id: UUID, organization_id: UUID) -> Group | None:
+        return await self.get(group_id, Group.organization_id == organization_id)
+
+    async def get_by_name(self, organization_id: UUID, name: str) -> Group | None:
+        """El grupo con ese nombre, escrito como sea (ver group_name_key)."""
+        result = await self.session.execute(
+            self.base_query().where(
+                Group.organization_id == organization_id,
+                Group.name_key == group_name_key(name),
+            )
+        )
+        return result.scalars().first()
 
     async def search(
         self, organization_id: UUID, text: str | None, limit: int = 20
-    ) -> Sequence[tuple[Client, int]]:
-        """Clientes activos de la organización cuyo nombre, o el de una de sus empresas
-        (razón social, nombre comercial o NIT), contiene el texto. Con su número de empresas."""
+    ) -> Sequence[tuple[Group, int]]:
+        """Grupos activos de la firma cuyo nombre contiene el texto, con su número de
+        empresas. Sin texto, todos (el selector del paso 1)."""
         companies = (
             select(func.count(Company.id))
-            .where(Company.client_id == Client.id, Company.is_deleted.is_(False))
+            .where(Company.group_id == Group.id, Company.is_deleted.is_(False))
             .scalar_subquery()
         )
-        query = select(Client, companies).where(
-            Client.organization_id == organization_id,
-            Client.is_active.is_(True),
-            Client.is_deleted.is_(False),
+        query = select(Group, companies).where(
+            Group.organization_id == organization_id,
+            Group.is_active.is_(True),
+            Group.is_deleted.is_(False),
         )
-        if text:
-            pattern = f"%{text.strip()}%"
-            matches_company = (
-                select(Company.id)
-                .where(
-                    Company.client_id == Client.id,
-                    Company.is_deleted.is_(False),
-                    Company.legal_name.ilike(pattern)
-                    | Company.trade_name.ilike(pattern)
-                    | Company.nit.ilike(pattern),
-                )
-                .exists()
-            )
-            query = query.where(Client.name.ilike(pattern) | matches_company)
-        result = await self.session.execute(query.order_by(func.lower(Client.name)).limit(limit))
+        if text and text.strip():
+            query = query.where(Group.name_key.contains(group_name_key(text)))
+        result = await self.session.execute(query.order_by(Group.name_key).limit(limit))
         return result.tuples().all()
 
 
@@ -65,18 +64,49 @@ class CompanyRepository(BaseRepository[Company]):
 class CompanyTaxResponsibilityRepository(BaseRepository[CompanyTaxResponsibility]):
     model = CompanyTaxResponsibility
 
+    async def codes_for(self, company_id: UUID) -> list[str]:
+        result = await self.session.execute(
+            select(CompanyTaxResponsibility.code)
+            .where(
+                CompanyTaxResponsibility.company_id == company_id,
+                CompanyTaxResponsibility.is_deleted.is_(False),
+            )
+            .order_by(CompanyTaxResponsibility.created_at, CompanyTaxResponsibility.code)
+        )
+        return list(result.scalars().all())
+
 
 class CompanyRutVersionRepository(BaseRepository[CompanyRutVersion]):
     model = CompanyRutVersion
 
+    async def list_for(self, company_id: UUID) -> Sequence[CompanyRutVersion]:
+        """De la más reciente a la más antigua, por fecha de actualización."""
+        result = await self.session.execute(
+            self.base_query()
+            .where(CompanyRutVersion.company_id == company_id)
+            .order_by(
+                CompanyRutVersion.rut_updated_at.desc().nulls_last(),
+                CompanyRutVersion.created_at.desc(),
+            )
+        )
+        return result.scalars().all()
 
-class ClientUserRepository(BaseRepository[ClientUser]):
-    model = ClientUser
 
-    async def get_by_email(self, client_id: UUID, email: str) -> ClientUser | None:
+class CompanyUserRepository(BaseRepository[CompanyUser]):
+    model = CompanyUser
+
+    async def list_for(self, company_id: UUID) -> Sequence[CompanyUser]:
+        result = await self.session.execute(
+            self.base_query()
+            .where(CompanyUser.company_id == company_id)
+            .order_by(CompanyUser.created_at, CompanyUser.email)
+        )
+        return result.scalars().all()
+
+    async def get_by_email(self, company_id: UUID, email: str) -> CompanyUser | None:
         result = await self.session.execute(
             self.base_query().where(
-                ClientUser.client_id == client_id, ClientUser.email == email.lower()
+                CompanyUser.company_id == company_id, CompanyUser.email == email.lower()
             )
         )
         return result.scalars().first()

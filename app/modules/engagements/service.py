@@ -44,6 +44,25 @@ class EngagementService:
         self.companies = CompanyRepository(session)
         self.platform = PlatformRepository(session)
 
+    async def list_for_company(self, company_id: UUID) -> list[EngagementRead]:
+        rows = await self.engagements.list_for_company(company_id)
+        return [
+            EngagementRead(
+                id=e.id,
+                company_id=e.company_id,
+                service_id=e.service_id,
+                obligation=NamedRef(id=e.obligation_id, name=obligation),
+                service_type=NamedRef(id=e.service_type_id, name=service_type),
+                fiscal_year=e.fiscal_year,
+                due_date=e.due_date,
+                status=e.status,
+                partner=PersonRef(user_id=e.partner_user_id, full_name=partner or ""),
+                manager=PersonRef(user_id=e.manager_user_id, full_name=manager or ""),
+                created_at=e.created_at,
+            )
+            for e, obligation, service_type, partner, manager in rows
+        ]
+
     async def create_for_company(
         self, company_id: UUID, item: EngagementIn, tenant_id: UUID | None, actor: Principal
     ) -> EngagementRead:

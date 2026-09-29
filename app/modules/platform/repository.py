@@ -64,6 +64,15 @@ class PlatformRepository:
         )
         return result.scalars().unique().all()
 
+    async def names_of(self, user_ids: set[UUID]) -> dict[UUID, str]:
+        """Nombre de cada persona visible con el contexto actual (seguridad por filas)."""
+        if not user_ids:
+            return {}
+        result = await self.session.execute(
+            select(User.id, User.full_name).where(User.id.in_(user_ids))
+        )
+        return {user_id: name or "" for user_id, name in result.tuples().all()}
+
     async def get_member_with_role(
         self, user_id: UUID, tenant_id: UUID, role: SystemRole
     ) -> User | None:
