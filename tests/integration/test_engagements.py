@@ -11,6 +11,7 @@ from app.modules.catalog.models import ObligationNature
 from app.modules.clients.models import Company
 from app.modules.engagements.models import Engagement
 from app.modules.platform.models import MembershipStatus, SystemRole
+from tests.integration.conftest import auth_headers
 from tests.integration.test_catalog import Catalog
 from tests.integration.test_create_client import URL as CLIENTS_URL
 from tests.integration.test_create_client import payload
@@ -230,6 +231,70 @@ async def test_requires_clientes_crear(client, staff, team):
         f"/api/v1/companies/{uuid4()}/engagements", json=engagement(team), headers=asociado
     )
     assert response.status_code == 403
+
+
+# ── Consultar un compromiso: GET /engagements/{id} ──
+
+
+async def create_engagement(client, admin, team) -> dict:
+    """Crea un cliente con un compromiso de Elaboración de exógena y devuelve el compromiso."""
+    body = payload()
+    body["engagements"] = [engagement(team)]
+    response = await client.post(CLIENTS_URL, json=body, headers=admin)
+    assert response.status_code == 201, response.text
+    return response.json()["data"]["engagements"][0]
+
+
+async def test_get_engagement(client, admin, team):
+    created = await create_engagement(client, admin, team)
+
+    response = await client.get(f"/api/v1/engagements/{created['id']}", headers=admin)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"] == {
+        "id": created["id"],
+        "company_id": created["company_id"],
+        "fiscal_year": 2025,
+        "status": "por_iniciar",
+        "obligation": created["obligation"],
+        "service_type": created["service_type"],
+    }
+    assert response.json()["data"]["obligation"]["name"] == "Información exógena"
+    assert response.json()["data"]["service_type"]["name"] == "Elaboración"
+
+
+async def test_partner_sees_only_his_engagements(client, admin, team, platform, firm):
+    created = await create_engagement(client, admin, team)
+    url = f"/api/v1/engagements/{created['id']}"
+    otro_socio = await platform.user("otro.socio@jhrwise.com", "Otro Socio")
+    await platform.member(otro_socio, firm, SystemRole.SOCIO)
+
+    assert (await client.get(url, headers=auth_headers(team.socio, firm))).status_code == 200
+    # Fuera de su alcance: 404, como si no existiera
+    assert (await client.get(url, headers=auth_headers(otro_socio, firm))).status_code == 404
+
+
+async def test_engagement_of_another_organization_is_not_found(client, admin, team, platform):
+    created = await create_engagement(client, admin, team)
+    otra = await platform.tenant("otra-firma")
+    otro_admin = await platform.user("admin@otra.co")
+    await platform.member(otro_admin, otra, SystemRole.ADMINISTRADOR)
+
+    response = await client.get(
+        f"/api/v1/engagements/{created['id']}", headers=auth_headers(otro_admin, otra)
+    )
+
+    assert response.status_code == 404
+
+
+async def test_get_engagement_unknown_or_unauthorized(client, admin, team, platform, firm):
+    created = await create_engagement(client, admin, team)
+    url = f"/api/v1/engagements/{created['id']}"
+
+    assert (await client.get(f"/api/v1/engagements/{uuid4()}", headers=admin)).status_code == 404
+    assert (await client.get(url)).status_code == 401
+    outsider = auth_headers(await platform.user("externo@x.co"), firm)
+    assert (await client.get(url, headers=outsider)).status_code == 403
 
 
 # ── Selectores de socio y gerente ──
