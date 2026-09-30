@@ -50,3 +50,14 @@ class EngagementRead(BaseModel):
     partner: PersonRef = Field(description="Socio")
     manager: PersonRef = Field(description="Gerente")
     created_at: datetime
+
+
+class EngagementSummary(BaseModel):
+    """GET /engagements/{id}: el compromiso con su obligación y su tipo de servicio."""
+
+    id: UUID
+    company_id: UUID
+    fiscal_year: int = Field(description="Año gravable")
+    status: EngagementStatus
+    obligation: NamedRef
+    service_type: NamedRef

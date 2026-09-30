@@ -8,7 +8,12 @@ from app.core.auth import Principal
 from app.core.config import settings
 from app.core.database import set_db_context
 from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
-from app.modules.clients.listing import CompanyFilters, CompanyScope, list_companies
+from app.modules.clients.listing import (
+    CompanyFilters,
+    CompanyRow,
+    CompanyScope,
+    list_companies,
+)
 from app.modules.clients.models import (
     Company,
     CompanyRutVersion,
@@ -296,13 +301,7 @@ class ClientService:
         """Con el mismo alcance que la pantalla: si quien consulta no puede ver la
         empresa, responde 404 (no 403, para no confirmar que existe)."""
         scope = await self._scope(actor, tenant_id)
-        one = PageParams(page=1, size=1)
-        rows, _ = await list_companies(
-            self.session, scope, CompanyFilters(company_id=company_id), one
-        )
-        if not rows:
-            raise NotFoundError("Company not found")
-        row = rows[0]
+        row = await self._visible_row(scope, company_id)
         company = row.company
 
         group = await self.groups.groups.get(company.group_id) if company.group_id else None
@@ -341,6 +340,22 @@ class ClientService:
                 CompanyUserRead.model_validate(u) for u in await self.users.list_for(company.id)
             ],
         )
+
+    async def ensure_visible(
+        self, actor: Principal, tenant_id: UUID | None, company_id: UUID
+    ) -> None:
+        """404 si quien consulta no puede ver la empresa, con el alcance de la pantalla.
+        Lo usa también lo que cuelga de la empresa (p. ej. GET /engagements/{id})."""
+        await self._visible_row(await self._scope(actor, tenant_id), company_id)
+
+    async def _visible_row(self, scope: CompanyScope, company_id: UUID) -> CompanyRow:
+        one = PageParams(page=1, size=1)
+        rows, _ = await list_companies(
+            self.session, scope, CompanyFilters(company_id=company_id), one
+        )
+        if not rows:
+            raise NotFoundError("Company not found")
+        return rows[0]
 
     @staticmethod
     def _versions_read(

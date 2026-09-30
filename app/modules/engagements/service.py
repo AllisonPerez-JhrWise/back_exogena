@@ -14,6 +14,7 @@ from app.modules.engagements.repository import EngagementRepository
 from app.modules.engagements.schemas import (
     EngagementIn,
     EngagementRead,
+    EngagementSummary,
     NamedRef,
     PersonRef,
 )
@@ -62,6 +63,22 @@ class EngagementService:
             )
             for e, obligation, service_type, partner, manager in rows
         ]
+
+    async def get(self, engagement_id: UUID, tenant_id: UUID | None) -> EngagementSummary:
+        """404 si no existe o es de otra organización. Si quien consulta puede ver su
+        empresa lo revisa el router (ClientService.ensure_visible)."""
+        row = await self.engagements.get_with_names(engagement_id)
+        if row is None or (tenant_id and row[0].tenant_id != tenant_id):
+            raise NotFoundError("Engagement not found")
+        engagement, obligation, service_type = row
+        return EngagementSummary(
+            id=engagement.id,
+            company_id=engagement.company_id,
+            fiscal_year=engagement.fiscal_year,
+            status=engagement.status,
+            obligation=NamedRef(id=engagement.obligation_id, name=obligation),
+            service_type=NamedRef(id=engagement.service_type_id, name=service_type),
+        )
 
     async def create_for_company(
         self, company_id: UUID, item: EngagementIn, tenant_id: UUID | None, actor: Principal

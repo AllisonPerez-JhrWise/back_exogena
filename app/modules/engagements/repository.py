@@ -32,6 +32,16 @@ class EngagementRepository(BaseRepository[Engagement]):
         )
         return result.tuples().all()
 
+    async def get_with_names(self, engagement_id: UUID) -> tuple[Engagement, str, str] | None:
+        """El compromiso (no borrado) con los nombres de su obligación y tipo de servicio."""
+        result = await self.session.execute(
+            select(Engagement, Obligation.name, ServiceType.name)
+            .join(Obligation, Obligation.id == Engagement.obligation_id)
+            .join(ServiceType, ServiceType.id == Engagement.service_type_id)
+            .where(Engagement.id == engagement_id, Engagement.is_deleted.is_(False))
+        )
+        return result.tuples().first()
+
     async def exists(self, company_id: UUID, service_id: UUID, fiscal_year: int) -> bool:
         result = await self.session.execute(
             self.base_query().where(
