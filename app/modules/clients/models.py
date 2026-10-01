@@ -86,7 +86,7 @@ class Company(BaseTable):
         # El NIT no se repite dentro de la organización (entre empresas no borradas)
         _active_unique("ux_companies_organization_nit", "organization_id", "nit"),
         CheckConstraint("nit ~ '^[0-9]{5,15}$'", name="nit_digits"),
-        CheckConstraint("dv ~ '^[0-9]$'", name="dv_digit"),
+        CheckConstraint("check_digit ~ '^[0-9]$'", name="check_digit_digit"),
         CheckConstraint("person_type IN ('natural', 'juridica')", name="person_type_valid"),
         CheckConstraint("department_code ~ '^[0-9]{2}$'", name="department_code_dane"),
         CheckConstraint("city_code ~ '^[0-9]{5}$'", name="city_code_dane"),
@@ -113,7 +113,7 @@ class Company(BaseTable):
     # ── Datos del RUT vigente (no editables; vienen de la última versión cargada) ──
     # NIT sin DV. En persona natural es el número de identificación
     nit: str = Field(max_length=15)
-    dv: str = Field(max_length=1, description="Dígito de verificación")
+    check_digit: str = Field(max_length=1, description="Dígito de verificación")
     person_type: str = Field(max_length=10)
     taxpayer_type: str | None = Field(
         default=None, max_length=100, description="Tipo de contribuyente"

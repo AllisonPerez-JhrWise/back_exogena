@@ -21,7 +21,7 @@ async def test_company_detail(client, admin, screen):  # noqa: F811
     data = detail(await client.get(f"{URL}/{screen.andina['company']['id']}", headers=admin))
 
     company = data["company"]
-    assert (company["display_name"], company["nit"], company["dv"]) == (
+    assert (company["display_name"], company["nit"], company["check_digit"]) == (
         "Comercializadora Andina SAS",
         "900123456",
         "8",

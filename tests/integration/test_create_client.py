@@ -32,7 +32,7 @@ GENERATED = (date.today() - timedelta(days=5)).isoformat()
 PAYLOAD = {
     "rut": {
         "nit": "900123456",
-        "dv": "8",
+        "check_digit": "8",
         "person_type": "juridica",
         "taxpayer_type": "Persona jurídica",
         "legal_name": "Comercializadora Andina SAS",
@@ -72,11 +72,11 @@ PAYLOAD = {
 }
 
 # Otra empresa (DV correcto: 800197268 -> 4)
-OTHER_COMPANY_RUT = {"nit": "800197268", "dv": "4", "legal_name": "Andina Zona Franca SAS"}
+OTHER_COMPANY_RUT = {"nit": "800197268", "check_digit": "4", "legal_name": "Andina Zona Franca SAS"}
 
 
 def payload(**changes) -> dict:
-    """Copia del ejemplo con cambios: payload(rut={"dv": "1"}) cambia solo el DV."""
+    """Copia del ejemplo con cambios: payload(rut={"check_digit": "1"}) cambia solo el DV."""
     data = copy.deepcopy(PAYLOAD)
     for section, values in changes.items():
         if isinstance(values, dict) and isinstance(data.get(section), dict):
@@ -282,7 +282,7 @@ async def test_rut_too_old_tells_how_many_days(client, admin):
 @pytest.mark.parametrize(
     "changes, expected",
     [
-        ({"rut": {"dv": "1"}}, "verification digit"),
+        ({"rut": {"check_digit": "1"}}, "verification digit"),
         ({"rut": {"legal_name": None}}, "legal_name is required"),
         (
             {"rut": {"person_type": "natural", "legal_name": None, "first_name": "Juan"}},
@@ -321,7 +321,7 @@ async def test_natural_person_client(client, admin):
         admin,
         rut={
             "nit": "1020304050",
-            "dv": calculate_dv("1020304050"),
+            "check_digit": calculate_dv("1020304050"),
             "person_type": "natural",
             "legal_name": None,
             "first_name": "Juan",

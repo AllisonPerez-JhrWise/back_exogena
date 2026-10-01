@@ -280,7 +280,7 @@ class ClientService:
                 display_name=row.company.display_name,
                 trade_name=row.company.trade_name,
                 nit=row.company.nit,
-                dv=row.company.dv,
+                check_digit=row.company.check_digit,
                 group_id=row.company.group_id,
                 group=row.group,
                 active_engagements=row.active_engagements,
@@ -318,7 +318,7 @@ class ClientService:
                     id=s.company.id,
                     display_name=s.company.display_name,
                     nit=s.company.nit,
-                    dv=s.company.dv,
+                    check_digit=s.company.check_digit,
                     status=s.status,
                 )
                 for s in siblings
