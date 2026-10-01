@@ -1,23 +1,24 @@
 # Skill: Creating a New Module / Endpoints
 
 The project is organized by business module under `app/modules/<module>/`, each
-with layers: router → service → repository → model. `app/modules/notes/` is the
-reference implementation; copy it.
+with layers: router → service → repository → model. `app/modules/catalog/` is a small
+reference implementation.
 
 ## 1. Model (`models.py`)
 
 ```python
 from uuid import UUID
 from sqlmodel import Field
-from app.shared.models import BaseTable
+from app.shared.models import DB_SCHEMA, BaseTable
 
 
-class Invoice(BaseTable):          # -> table invoices.invoices (schema = module folder)
+class Invoice(BaseTable):  # -> table exogena.invoices (every table lives in DB_SCHEMA)
     __tablename__ = "invoices"
 
     number: str = Field(index=True, max_length=30)
     total: int
-    customer_id: UUID = Field(index=True)   # other modules: plain UUID, no FK
+    # Same schema, so tables of this service use a real FK; build it with DB_SCHEMA
+    client_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.clients.id", index=True)
 ```
 
 `BaseTable` already adds `id`, `is_deleted`, `is_active`, `created_at`, `updated_at`,

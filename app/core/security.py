@@ -1,37 +1,27 @@
+"""Tokens PROVISIONALES (HS256) mientras se integra Cognito.
+
+El login lo hace la plataforma con Cognito; este servicio solo valida el token. Cuando
+lleguen los datos de Cognito (región, User Pool, App Client), `decode_access_token`
+validará con las llaves públicas del pool (RS256) y `sub` será el cognito_sub.
+`create_access_token` existe solo para pruebas y desarrollo local.
+"""
+
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
-from pwdlib import PasswordHash
 
 from app.core.config import settings
 from app.core.exceptions import UnauthorizedError
-
-password_hash = PasswordHash.recommended()  # Argon2
-
-# Se verifica cuando el usuario no existe, para que el tiempo de respuesta no lo revele
-_DUMMY_HASH = password_hash.hash("dummy-password")
-
-
-def hash_password(password: str) -> str:
-    return password_hash.hash(password)
-
-
-def verify_password(password: str, hashed: str | None) -> bool:
-    if not hashed:
-        password_hash.verify(password, _DUMMY_HASH)
-        return False
-    return password_hash.verify(password, hashed)
 
 
 def create_access_token(
     subject: Any,
     claims: dict[str, Any] | None = None,
-    expires_delta: timedelta | None = None,
+    expires_delta: timedelta = timedelta(hours=1),
 ) -> str:
     now = datetime.now(UTC)
-    expire = now + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
-    payload = {**(claims or {}), "sub": str(subject), "iat": now, "exp": expire}
+    payload = {**(claims or {}), "sub": str(subject), "iat": now, "exp": now + expires_delta}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 

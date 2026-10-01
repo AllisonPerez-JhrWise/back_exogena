@@ -18,29 +18,41 @@ SQLModel.metadata.naming_convention = {
 
 MODULES_PACKAGE = "app.modules"
 
+# Todas las tablas del servicio viven en un solo schema de PostgreSQL. El código sigue
+# separado por módulos (app/modules/*): el schema es solo su ubicación en la base de datos.
+DB_SCHEMA = "exogena"
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
 class AutoTableMeta(SQLModelMetaclass):
-    """Toda subclase de BaseTable es una tabla, guardada en el schema de PostgreSQL
-    con el nombre de su módulo: app/modules/<modulo>/models.py -> schema <modulo>.
-    Se puede cambiar con `__table_args__ = {"schema": "..."}`."""
+    """Toda subclase de BaseTable es una tabla, guardada en el schema DB_SCHEMA.
+    Una tabla puede usar otro con `__table_args__ = {"schema": "..."}`.
+
+    `__table_args__` puede ser un dict o una tupla (índices, checks..., dict opcional al final),
+    como en SQLAlchemy; en ambos casos se agrega el schema si no se indicó."""
 
     def __new__(cls, name, bases, dct, **kwargs):
         is_table = any(isinstance(base, AutoTableMeta) for base in bases)
         if is_table:
             kwargs.setdefault("table", True)
 
-            parts = dct.get("__module__", "").split(".")
-            if dct.get("__module__", "").startswith(MODULES_PACKAGE + ".") and len(parts) > 3:
-                table_args = dct.get("__table_args__") or {}
-                if isinstance(table_args, dict):
-                    table_args.setdefault("schema", parts[2])
-                    dct["__table_args__"] = table_args
+            dct["__table_args__"] = _with_schema(dct.get("__table_args__"), DB_SCHEMA)
 
         return super().__new__(cls, name, bases, dct, **kwargs)
+
+
+def _with_schema(table_args, schema: str):
+    """Devuelve `table_args` con el schema indicado, respetando uno explícito."""
+    if not table_args:
+        return {"schema": schema}
+    if isinstance(table_args, dict):
+        return {"schema": schema, **table_args}
+    if isinstance(table_args[-1], dict):
+        return (*table_args[:-1], {"schema": schema, **table_args[-1]})
+    return (*table_args, {"schema": schema})
 
 
 class BaseTable(SQLModel, metaclass=AutoTableMeta):
@@ -62,9 +74,17 @@ class BaseTable(SQLModel, metaclass=AutoTableMeta):
         nullable=True,
     )
 
-    # UUID simples (sin FK): el usuario puede vivir en otro servicio / proveedor de identidad
+    # id de public.users, sin FK: son solo auditoría y no deben impedir nada en la plataforma
     created_by: UUID | None = Field(default=None, nullable=True)
     updated_by: UUID | None = Field(default=None, nullable=True)
+
+
+def join_name_parts(*parts: str | None) -> str:
+    """Une partes de un nombre ignorando las vacías.
+
+    ("Paula", None, "Córdoba") -> "Paula Córdoba"
+    """
+    return " ".join(part.strip() for part in parts if part and part.strip())
 
 
 def load_all_models() -> None:

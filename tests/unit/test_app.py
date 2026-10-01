@@ -72,11 +72,11 @@ async def test_request_id_is_generated_and_propagated(client):
 async def test_cors_only_allows_configured_origins(client):
     preflight = {"Access-Control-Request-Method": "GET"}
     allowed = await client.options(
-        "/api/v1/notes", headers={"Origin": "http://localhost:3000", **preflight}
+        "/api/v1/obligations", headers={"Origin": "http://localhost:3000", **preflight}
     )
     assert allowed.headers["access-control-allow-origin"] == "http://localhost:3000"
 
     denied = await client.options(
-        "/api/v1/notes", headers={"Origin": "https://evil.example", **preflight}
+        "/api/v1/obligations", headers={"Origin": "https://evil.example", **preflight}
     )
     assert "access-control-allow-origin" not in denied.headers
