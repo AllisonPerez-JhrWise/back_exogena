@@ -16,8 +16,8 @@ from app.modules.clients.models import Company, CompanyStatus, CompanyUser, Grou
 from app.modules.engagements.models import Engagement, EngagementStatus
 from app.shared.pagination import PageParams
 
-# Compromisos que cuentan como activos en la pantalla
-ACTIVE_ENGAGEMENT_STATUSES = (EngagementStatus.POR_INICIAR, EngagementStatus.EN_CURSO)
+# Compromisos que cuentan como activos en la pantalla: todos menos los cerrados
+ACTIVE_ENGAGEMENT_STATUSES = tuple(s for s in EngagementStatus if s != EngagementStatus.CLOSED)
 
 
 _STATUS = "|".join(s.value for s in CompanyStatus)

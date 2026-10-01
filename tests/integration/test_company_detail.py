@@ -38,13 +38,12 @@ async def test_company_detail(client, admin, screen):  # noqa: F811
 
     [engagement] = data["engagements"]
     assert (
-        engagement["obligation"]["name"],
-        engagement["service_type"]["name"],
+        engagement["service_type"],
         engagement["fiscal_year"],
         engagement["status"],
         engagement["partner"]["full_name"],
         engagement["manager"]["full_name"],
-    ) == ("Información exógena", "Elaboración", 2025, "por_iniciar", "Juan Restrepo", "María Gómez")
+    ) == ("exogena", 2025, "created", "Juan Restrepo", "María Gómez")
 
     [version] = data["rut_versions"]
     assert (version["covers_from_year"], version["covers_to_year"]) == (2026, None)
