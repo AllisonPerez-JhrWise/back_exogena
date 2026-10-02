@@ -9,7 +9,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, Index, text
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, Index, text
 from sqlmodel import Field
 
 from app.shared.models import DB_SCHEMA, BaseTable
@@ -82,3 +82,51 @@ class Engagement(BaseTable):
     )
     obligation_id: UUID | None = Field(default=None, foreign_key=f"{DB_SCHEMA}.obligations.id")
     service_type_id: UUID | None = Field(default=None, foreign_key=f"{DB_SCHEMA}.service_types.id")
+
+
+class FigureConcept(StrEnum):
+    """Conceptos de las cifras del compromiso. Se guarda el código; el front muestra la
+    etiqueta."""
+
+    GROSS_INCOME = "gross_income"  # Ingresos brutos
+    GROSS_EQUITY = "gross_equity"  # Patrimonio bruto
+    ANNUAL_VAT_INCOME = "annual_vat_income"  # Ingresos de IVA del año
+    # Rentas de capital y no laborales
+    CAPITAL_AND_NON_LABOR_INCOME = "capital_and_non_labor_income"
+
+
+class EngagementFigure(BaseTable):
+    """Las cifras que usan las reglas (p. ej. si los ingresos brutos superan el tope), ya
+    calculadas. Su año puede no ser el del compromiso: para la exógena de 2025 se usan los
+    ingresos de 2024, de la renta del año anterior."""
+
+    __tablename__ = "engagement_figures"
+    __table_args__ = (
+        # Una sola cifra por concepto y año en el compromiso: si se recalcula, se reemplaza
+        Index(
+            "ux_engagement_figures_engagement_concept_year",
+            "engagement_id",
+            "concept",
+            "tax_year",
+            unique=True,
+            postgresql_where=text("NOT is_deleted"),
+        ),
+        CheckConstraint(
+            "concept IN ('gross_income', 'gross_equity', 'annual_vat_income',"
+            " 'capital_and_non_labor_income')",
+            name="concept_valid",
+        ),
+        CheckConstraint("tax_year BETWEEN 2000 AND 2100", name="tax_year_range"),
+    )
+
+    # La firma. ID de Identidad, sin FK
+    organization_id: UUID = Field(index=True)
+    engagement_id: UUID = Field(foreign_key=f"{DB_SCHEMA}.engagements.id", index=True)
+    concept: str = Field(max_length=40)
+    tax_year: int = Field(description="Año gravable de la cifra")
+    # Entero en pesos, sin decimales (regla del acuerdo)
+    value: int = Field(sa_type=BigInteger, description="Valor en pesos")
+    # De dónde salió. La tarea no define sus valores: texto libre por ahora
+    source: str | None = Field(default=None, max_length=100, description="Origen")
+    # El documento en extracción (otro servicio): sin FK
+    document_id: UUID | None = None
