@@ -2,7 +2,7 @@
 roles del sistema, permisos, sus asignaciones y la política de privacidad vigente.
 
 No copia datos de tenants ni de usuarios. Lo usa `make db-sync-cloud` para generar
-docker/db-init/20_catalogos.sql; se conecta con la DATABASE_URL de .env.aws.
+docker/db-init/20_catalogos.sql; se conecta con DB_USER y DB_PASSWORD de .env.aws.
 """
 
 import asyncio
@@ -52,7 +52,7 @@ async def insert(
 
 
 async def main() -> None:
-    engine = create_async_engine(settings.database_url, connect_args=settings.db_connect_args)
+    engine = create_async_engine(settings.async_database_url, connect_args=settings.db_connect_args)
     async with engine.connect() as conn:
         parts = [
             HEADER,

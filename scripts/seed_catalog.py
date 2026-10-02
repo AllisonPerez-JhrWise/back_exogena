@@ -2,7 +2,7 @@
 organización indicada. Se puede repetir: solo crea lo que falta.
 
 Uso: python -m scripts.seed_catalog --tenant-id <uuid de la firma>
-Se conecta con MIGRATION_DATABASE_URL (o DATABASE_URL): el dueño de las tablas de exogena.
+Se conecta con DB_ADMIN_USER (o DB_USER): el dueño de las tablas de exogena.
 En AWS: make aws-seed-catalog tenant=<uuid>
 """
 

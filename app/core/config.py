@@ -4,7 +4,8 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL
+from wise_comun.config import AjustesBase, registrar
 
 
 class Environment(StrEnum):
@@ -14,10 +15,12 @@ class Environment(StrEnum):
     PRODUCTION = "production"
 
 
-class Settings(BaseSettings):
-    """Única fuente de configuración. Cada valor viene de variables de entorno / .env."""
+class Settings(AjustesBase):
+    """Única fuente de configuración. Cada valor viene de variables de entorno / .env.
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    Lo común a todos los servicios —base de datos por partes (DB_HOST, DB_USER…), Cognito,
+    dirección de Identidad— viene de `AjustesBase` de wise-comun, como en wise-auth. Aquí
+    queda solo lo de exógena."""
 
     # ── App ──────────────────────────────────────────────────────────────
     app_name: str = "back_exogena"
@@ -26,18 +29,12 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
 
     # ── Base de datos ─────────────────────────────────────────────────────────
-    # Debe usar el driver async: postgresql+asyncpg://usuario:clave@host:5432/bd
-    # Con el que corre la app. En AWS es wiseerp_app: puede usar las funciones app_* de la
-    # plataforma y la seguridad por filas (RLS) le aplica.
-    database_url: str
-    # Con el que corren las migraciones (dueño del schema exogena). Vacío = database_url
-    migration_database_url: str | None = None
+    # Schema propio del servicio (wise-comun lo pone como search_path)
+    db_schema: str = "exogena"
     # Por proceso. Conexiones totales = pool_size + max_overflow, por cada worker/tarea
     db_pool_size: int = 5
     db_max_overflow: int = 5
     db_pool_recycle_seconds: int = 1800
-    # Modo SSL de asyncpg: disable | prefer | require | verify-ca | verify-full
-    db_ssl_mode: str | None = None
     db_echo: bool = False
     # Tabla de versiones de Alembic propia: la base de datos RDS se comparte con otros servicios
     db_version_table: str = "alembic_version_exogena"
@@ -71,19 +68,39 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.environment == Environment.PRODUCTION
 
+    # ── Conexión async (PROVISIONAL: hasta pasar el servicio a síncrono con wise_comun.db) ──
+    # Se arma con URL.create y no con texto: así una contraseña con caracteres especiales
+    # (@, /, :…) no rompe la dirección.
+
+    def _async_url(self, user: str, password: str) -> str:
+        return URL.create(
+            "postgresql+asyncpg",
+            username=user,
+            password=password,
+            host=self.db_host,
+            port=self.db_port,
+            database=self.db_name,
+        ).render_as_string(hide_password=False)
+
+    @property
+    def async_database_url(self) -> str:
+        """La app: DB_USER (en AWS, el rol de aplicación, sujeto a RLS)."""
+        return self._async_url(self.db_user, self.db_password)
+
     @property
     def alembic_database_url(self) -> str:
-        return self.migration_database_url or self.database_url
+        """Las migraciones: DB_ADMIN_USER, el dueño del schema exogena (vacío = DB_USER)."""
+        if self.db_admin_user and self.db_admin_password:
+            return self._async_url(self.db_admin_user, self.db_admin_password)
+        return self.async_database_url
 
     @property
     def db_connect_args(self) -> dict[str, Any]:
-        return {"ssl": self.db_ssl_mode} if self.db_ssl_mode else {}
+        # asyncpg recibe el modo SSL como argumento (disable | prefer | require…)
+        return {"ssl": self.db_sslmode}
 
     @model_validator(mode="after")
     def _check_consistency(self) -> "Settings":
-        for url in (self.database_url, self.migration_database_url):
-            if url and not url.startswith("postgresql+asyncpg://"):
-                raise ValueError("Database URLs must use the postgresql+asyncpg:// driver")
         if self.is_production and "*" in self.cors_origins:
             raise ValueError("CORS_ORIGINS cannot contain '*' in production")
         if self.is_production and self.auth_bypass:
@@ -93,7 +110,10 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return Settings()  # type: ignore[call-arg]
 
+
+# wise-comun lee los ajustes de aquí (lo mismo que hace wise-auth en su config.py)
+registrar(get_settings)
 
 settings = get_settings()

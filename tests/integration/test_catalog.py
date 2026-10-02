@@ -160,7 +160,6 @@ def test_bypass_is_forbidden_in_production():
         Settings(
             environment="production",
             auth_bypass=True,
-            database_url="postgresql+asyncpg://u:p@h/db",
             jwt_secret="x" * 32,
         )
 

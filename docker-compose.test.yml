@@ -18,7 +18,12 @@ services:
       retries: 20
 
   app_test:
-    build: .
+    build:
+      context: .
+      additional_contexts:
+        wise_comun: ../wise-comun
+      args:
+        WISE_COMUN_FROM: local
     image: back-exogena
     user: root
     working_dir: /app
@@ -28,7 +33,17 @@ services:
         target: /app
     environment:
       ENVIRONMENT: test
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db_test:5432/exogena_test
+      DB_HOST: db_test
+      DB_PORT: "5432"
+      DB_NAME: exogena_test
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_SSLMODE: disable
+      # Vacíos: anulan los del .env local (que se monta con el código)
+      DB_ADMIN_USER: ""
+      DB_ADMIN_PASSWORD: ""
+      COGNITO_USER_POOL_ID: us-east-2_test
+      COGNITO_CLIENT_ID: test-client
       JWT_SECRET: test-secret-test-secret-test-secret-000
     depends_on:
       db_test:

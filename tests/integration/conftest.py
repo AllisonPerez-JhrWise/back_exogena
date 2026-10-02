@@ -35,7 +35,7 @@ def exogena_tables():
 async def engine():
     load_all_models()
     engine = create_async_engine(
-        settings.database_url,
+        settings.async_database_url,
         poolclass=pool.NullPool,
         connect_args=settings.db_connect_args,
     )

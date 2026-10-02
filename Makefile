@@ -98,10 +98,10 @@ seed: ## Base LOCAL lista para probar: firma, administrador, catalogo y token pa
 # Misma imagen de la app, pero con la conexión de .env.aws. MSYS_NO_PATHCONV evita que
 # Git Bash en Windows convierta /app en una ruta de Windows.
 # El .env local se monta con el código y la configuración también lo lee: se anulan sus
-# valores de desarrollo (modo de pruebas y la URL de migraciones de la base local), para que
-# todo use la DATABASE_URL de .env.aws
+# valores de desarrollo (modo de pruebas y el usuario de migraciones de la base local), para
+# que todo use DB_USER y DB_PASSWORD de .env.aws
 AWS_RUN := MSYS_NO_PATHCONV=1 docker run --rm --env-file .env.aws -e PYTHONPATH=/app \
-  -e AUTH_BYPASS=false -e MIGRATION_DATABASE_URL= \
+  -e AUTH_BYPASS=false -e DB_ADMIN_USER= -e DB_ADMIN_PASSWORD= \
   -v "$(CURDIR):/app" -w /app back-exogena
 AWS_ALEMBIC := $(AWS_RUN) alembic
 DB_INIT := docker/db-init
@@ -132,9 +132,11 @@ aws-seed-catalog: check-docker .env.aws ## ⚠ Carga el catalogo inicial en AWS.
 	  fi
 
 db-sync-cloud: check-docker .env.aws ## Solo lectura: copia de AWS la estructura de public y los catalogos
-	@url=$$(grep '^DATABASE_URL=' .env.aws | cut -d= -f2- | sed 's/+asyncpg//'); \
-	  MSYS_NO_PATHCONV=1 docker run --rm -e PGSSLMODE=require -e "URL=$$url" postgres:18 \
-	    sh -c 'pg_dump "$$URL" --schema-only --schema=public --exclude-table=public.alembic_version_exogena' \
+	@val() { grep "^$$1=" .env.aws | cut -d= -f2-; }; \
+	  MSYS_NO_PATHCONV=1 docker run --rm -e PGSSLMODE=require -e "PGHOST=$$(val DB_HOST)" \
+	    -e "PGPORT=$$(val DB_PORT)" -e "PGDATABASE=$$(val DB_NAME)" -e "PGUSER=$$(val DB_USER)" \
+	    -e "PGPASSWORD=$$(val DB_PASSWORD)" postgres:18 \
+	    sh -c 'pg_dump --schema-only --schema=public --exclude-table=public.alembic_version_exogena' \
 	    > $(DB_INIT)/.plataforma.tmp
 	@{ printf '%s\n' \
 	    "-- Estructura del schema public de la plataforma, copiada de la RDS (wiseerp)." \
@@ -190,6 +192,6 @@ check-docker:
 
 # Los comandos aws-* necesitan .env.aws con la conexión a RDS (no se sube a git)
 .env.aws:
-	@printf "$(RED)ERROR - Falta el archivo .env.aws.$(RESET) Crealo con DATABASE_URL (postgresql+asyncpg://...),\n"
-	@printf "DB_SSL_MODE=require, ENVIRONMENT=production, COOKIE_SECURE=true y JWT_SECRET.\n"
+	@printf "$(RED)ERROR - Falta el archivo .env.aws.$(RESET) Crealo con DB_HOST, DB_PORT, DB_NAME, DB_USER,\n"
+	@printf "DB_PASSWORD, DB_SSLMODE=require, COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, ENVIRONMENT=production y JWT_SECRET.\n"
 	@exit 1
