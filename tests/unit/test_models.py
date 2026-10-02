@@ -77,11 +77,11 @@ def test_platform_full_name_is_built_from_parts():
 
 def test_client_display_name_depends_on_person_type():
     empresa = Company(
-        nit="900123456", dv="4", person_type=PersonType.JURIDICA, legal_name="Andina SAS"
+        nit="900123456", check_digit="4", person_type=PersonType.JURIDICA, legal_name="Andina SAS"
     )
     persona = Company(
         nit="1020304050",
-        dv="1",
+        check_digit="1",
         person_type=PersonType.NATURAL,
         first_name="Juan",
         middle_name="Pablo",

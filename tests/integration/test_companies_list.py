@@ -37,7 +37,12 @@ async def create(client, admin, **changes) -> dict:
 
 
 def rut(nit: str, name: str) -> dict:
-    return {"nit": nit, "dv": calculate_dv(nit), "legal_name": name, "tax_responsibilities": []}
+    return {
+        "nit": nit,
+        "check_digit": calculate_dv(nit),
+        "legal_name": name,
+        "tax_responsibilities": [],
+    }
 
 
 @pytest.fixture
@@ -99,7 +104,12 @@ async def test_admin_sees_every_company_of_the_organization(client, admin, scree
         "Textiles Muisca SAS",
     ]
     andina = items["Comercializadora Andina SAS"]
-    assert (andina["nit"], andina["dv"], andina["group"], andina["active_engagements"]) == (
+    assert (
+        andina["nit"],
+        andina["check_digit"],
+        andina["group"],
+        andina["active_engagements"],
+    ) == (
         "900123456",
         "8",
         None,  # sin grupo

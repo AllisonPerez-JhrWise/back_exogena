@@ -38,7 +38,7 @@ def make_group(organization_id, name: str = "Grupo Muisca") -> Group:
 
 def make_company(organization_id, nit: str = "900123456", **extra) -> Company:
     values = {
-        "dv": "4",
+        "check_digit": "4",
         "person_type": PersonType.JURIDICA,
         "legal_name": "Comercializadora Andina SAS",
     }
@@ -101,7 +101,7 @@ async def test_same_nit_in_another_organization(db_session, platform):
     "field, value",
     [
         ("nit", "900-123"),
-        ("dv", "X"),
+        ("check_digit", "X"),
         ("person_type", "empresa"),
         ("department_code", "1"),
         ("city_code", "BOGOT"),

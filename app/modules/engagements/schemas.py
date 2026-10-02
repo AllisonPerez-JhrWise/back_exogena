@@ -1,36 +1,32 @@
-from datetime import date, datetime
+from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
-from app.modules.engagements.models import EngagementStatus
+from app.modules.engagements.models import EngagementServiceType, EngagementStatus
 
 
 class EngagementIn(BaseModel):
-    """Un compromiso (fila del paso 3 del formulario, o POST /companies/{id}/engagements)."""
+    """Un compromiso (fila del paso 3 del formulario, o POST /companies/{id}/engagements).
 
-    service_id: UUID = Field(
-        description="El service_id de GET /obligations/{id}/service-types (obligación + tipo)"
-    )
+    El tipo de servicio no se envía: hoy todos son de exógena. Si el front todavía manda
+    service_id, se ignora."""
+
     fiscal_year: int = Field(ge=2000, le=2100, description="Año gravable")
-    due_date: date | None = Field(
-        default=None, description="Vencimiento. Obligatorio si la obligación es tributaria"
-    )
+    # Con zona horaria (p. ej. 2026-05-15T23:59:00-05:00): sin ella la hora sería ambigua
+    start_date: AwareDatetime | None = Field(default=None, description="Fecha de inicio")
+    due_date: AwareDatetime = Field(description="Fecha de vencimiento")
     partner_user_id: UUID = Field(description="Socio (GET /members?role=socio)")
     manager_user_id: UUID = Field(description="Gerente (GET /members?role=gerente)")
 
 
 def check_no_repeated_engagements(items: list[EngagementIn]) -> None:
-    """REGLA DE NEGOCIO: el mismo servicio no se repite para el mismo año gravable.
+    """REGLA DE NEGOCIO: el mismo tipo de servicio no se repite para el mismo año gravable.
+    Como hoy solo existe exógena, basta con que no se repita el año.
     Si cambia, quitar esta validación (ver también Engagement.__table_args__)."""
-    keys = [(item.service_id, item.fiscal_year) for item in items]
-    if len(set(keys)) != len(keys):
-        raise ValueError("engagements has the same service repeated for the same fiscal year")
-
-
-class NamedRef(BaseModel):
-    id: UUID
-    name: str
+    years = [item.fiscal_year for item in items]
+    if len(set(years)) != len(years):
+        raise ValueError("engagements has the same fiscal year repeated")
 
 
 class PersonRef(BaseModel):
@@ -41,23 +37,22 @@ class PersonRef(BaseModel):
 class EngagementRead(BaseModel):
     id: UUID
     company_id: UUID
-    service_id: UUID
-    obligation: NamedRef
-    service_type: NamedRef
+    service_type: EngagementServiceType
     fiscal_year: int
-    due_date: date | None = None
+    start_date: datetime | None = None
+    due_date: datetime | None = None
     status: EngagementStatus
-    partner: PersonRef = Field(description="Socio")
-    manager: PersonRef = Field(description="Gerente")
+    # Vacíos solo en compromisos sin equipo registrado aquí
+    partner: PersonRef | None = Field(default=None, description="Socio")
+    manager: PersonRef | None = Field(default=None, description="Gerente")
     created_at: datetime
 
 
 class EngagementSummary(BaseModel):
-    """GET /engagements/{id}: el compromiso con su obligación y su tipo de servicio."""
+    """GET /engagements/{id}: el compromiso con su tipo de servicio."""
 
     id: UUID
     company_id: UUID
+    service_type: EngagementServiceType
     fiscal_year: int = Field(description="Año gravable")
     status: EngagementStatus
-    obligation: NamedRef
-    service_type: NamedRef

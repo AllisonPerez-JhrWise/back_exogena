@@ -29,7 +29,7 @@ class RutIn(BaseModel):
         pattern=r"^[0-9]{5,15}$",
         description="Sin dígito de verificación. En persona natural, el número de identificación",
     )
-    dv: str = Field(pattern=r"^[0-9]$")
+    check_digit: str = Field(pattern=r"^[0-9]$")
     person_type: PersonType
     taxpayer_type: str | None = Field(default=None, max_length=100)
     # Persona jurídica
@@ -52,8 +52,8 @@ class RutIn(BaseModel):
 
     @model_validator(mode="after")
     def _check_rut(self) -> "RutIn":
-        if calculate_dv(self.nit) != self.dv:
-            raise ValueError("The verification digit (dv) does not match the NIT")
+        if calculate_dv(self.nit) != self.check_digit:
+            raise ValueError("The verification digit (check_digit) does not match the NIT")
         if self.person_type == PersonType.JURIDICA and not self.legal_name:
             raise ValueError("legal_name is required for a juridica client")
         if self.person_type == PersonType.NATURAL and not (self.first_name and self.last_name):
@@ -147,7 +147,7 @@ class CompanyRead(BaseModel):
     contact_phone: str | None = None
     notes: str | None = None
     nit: str
-    dv: str
+    check_digit: str
     person_type: PersonType
     taxpayer_type: str | None = None
     legal_name: str | None = None
@@ -198,7 +198,7 @@ class CompanyListItem(BaseModel):
     display_name: str = Field(description="Empresa: razón social o nombre completo")
     trade_name: str | None = None
     nit: str
-    dv: str
+    check_digit: str
     group_id: UUID | None = None
     group: str | None = Field(default=None, description="Nombre del grupo, si pertenece a uno")
     active_engagements: int = Field(description="Compromisos por iniciar o en curso")
@@ -232,7 +232,7 @@ class GroupCompanyItem(BaseModel):
     id: UUID
     display_name: str
     nit: str
-    dv: str
+    check_digit: str
     status: CompanyStatus
 
 
