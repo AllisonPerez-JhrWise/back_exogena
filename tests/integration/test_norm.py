@@ -1,10 +1,19 @@
-"""Reglas de las tablas de la norma (UVT y topes), verificadas contra PostgreSQL real.
+"""Reglas de las tablas de la norma (UVT, topes, casillas del RUT y formatos),
+verificadas contra PostgreSQL real.
 
 Los valores son de ejemplo para probar las reglas, no los datos oficiales."""
 
 import pytest
 
-from app.modules.norm.models import Threshold, ThresholdAppliesTo, UvtValue
+from app.modules.norm.models import (
+    Format,
+    FormatConcept,
+    RutBox,
+    RutBoxCode,
+    Threshold,
+    ThresholdAppliesTo,
+    UvtValue,
+)
 from tests.integration.test_client_tables import assert_rejected, save
 
 
@@ -49,3 +58,31 @@ async def test_same_threshold_once_per_validity(db_session):
 )
 async def test_values_are_enforced(db_session, obj):
     await assert_rejected(db_session, obj)
+
+
+async def test_rut_box_dictionary(db_session):
+    """Es el diccionario de la norma: no guarda el RUT de ningún cliente."""
+    box = RutBox(box_code="53", name="Responsabilidades, calidades y atributos")
+    await save(db_session, box)
+    await save(db_session, RutBoxCode(rut_box_id=box.id, code="05", name="Renta"))
+    await assert_rejected(db_session, RutBoxCode(rut_box_id=box.id, code="05", name="Otra"))
+    await assert_rejected(db_session, RutBox(box_code="53", name="Repetida"))
+    await assert_rejected(db_session, RutBox(box_code="5A", name="Con letra"))
+
+
+async def test_formats_and_concepts(db_session):
+    f1001 = Format(number="1001", version=10, name="Pagos o abonos en cuenta", year_from=2025)
+    await save(db_session, f1001)
+    # Una versión nueva de la DIAN es otra fila
+    await save(db_session, Format(number="1001", version=11, name="Pagos", year_from=2026))
+    await assert_rejected(db_session, Format(number="1001", version=10, name="X", year_from=2025))
+    await assert_rejected(db_session, Format(number="101", version=1, name="X", year_from=2025))
+
+    concept = FormatConcept(
+        format_id=f1001.id, code="5002", description="Honorarios", year_from=2025
+    )
+    await save(db_session, concept)
+    await assert_rejected(
+        db_session,
+        FormatConcept(format_id=f1001.id, code="5002", description="Repetido", year_from=2025),
+    )
