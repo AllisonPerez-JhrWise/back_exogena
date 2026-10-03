@@ -9,8 +9,8 @@ from sqlalchemy import text, update
 
 from app.modules.clients.models import Company, CompanyUser
 from app.modules.clients.nit import calculate_dv
-from app.modules.platform.models import SystemRole
 from tests.integration.conftest import auth_headers
+from tests.integration.identity import SystemRole
 from tests.integration.test_create_client import OTHER_COMPANY_RUT, payload
 from tests.integration.test_create_client import URL as CLIENTS_URL
 from tests.integration.test_engagements import engagement, team  # noqa: F401 (fixture)
@@ -28,10 +28,10 @@ class Screen:
     distribuidora: dict  # inactiva
 
 
-async def create(client, admin, **changes) -> dict:
+def create(client, admin, **changes) -> dict:
     # Solo Andina conserva el nombre comercial del ejemplo ("Andina Comercial")
     changes.setdefault("organization", {"trade_name": None})
-    response = await client.post(CLIENTS_URL, json=payload(**changes), headers=admin)
+    response = client.post(CLIENTS_URL, json=payload(**changes), headers=admin)
     assert response.status_code == 201, response.text
     return response.json()["data"]
 
@@ -46,42 +46,40 @@ def rut(nit: str, name: str) -> dict:
 
 
 @pytest.fixture
-async def screen(client, admin, team, db_session) -> Screen:  # noqa: F811
-    andina = await create(
+def screen(client, admin, team, db_session) -> Screen:  # noqa: F811
+    andina = create(
         client,
         admin,
         organization={"trade_name": "Andina Comercial"},
         engagements=[engagement(team)],
         users=[],
     )
-    muisca = await create(
+    muisca = create(
         client,
         admin,
         group_name="Grupo Muisca",
         rut=rut("901223884", "Textiles Muisca SAS"),
         users=[],
     )
-    zona_franca = await create(
+    zona_franca = create(
         client, admin, group_id=muisca["company"]["group"]["id"], rut=OTHER_COMPANY_RUT, users=[]
     )
-    importadora = await create(
-        client, admin, rut=rut("830456789", "Importadora Andes SAS"), users=[]
-    )
-    servicios = await create(client, admin, rut=rut("901778030", "Muisca Servicios SAS"), users=[])
-    distribuidora = await create(
+    importadora = create(client, admin, rut=rut("830456789", "Importadora Andes SAS"), users=[])
+    servicios = create(client, admin, rut=rut("901778030", "Muisca Servicios SAS"), users=[])
+    distribuidora = create(
         client, admin, rut=rut("900987654", "Distribuidora del Norte SAS"), users=[]
     )
 
     # Casos que el asistente no deja crear: se preparan directo en la base
-    async def set_company(data: dict, **values):
-        await db_session.execute(
+    def set_company(data: dict, **values):
+        db_session.execute(
             update(Company).where(Company.id == UUID(data["company"]["id"])).values(**values)
         )
 
-    await set_company(importadora, rut_generated_at=date.today() - timedelta(days=430))
-    await set_company(servicios, rut_generated_at=None)
-    await set_company(distribuidora, is_active=False)
-    await db_session.commit()
+    set_company(importadora, rut_generated_at=date.today() - timedelta(days=430))
+    set_company(servicios, rut_generated_at=None)
+    set_company(distribuidora, is_active=False)
+    db_session.commit()
     return Screen(andina, muisca, zona_franca, importadora, servicios, distribuidora)
 
 
@@ -90,8 +88,8 @@ def rows(response) -> list[dict]:
     return response.json()["data"]["items"]
 
 
-async def test_admin_sees_every_company_of_the_organization(client, admin, screen):
-    response = await client.get(URL, headers=admin)
+def test_admin_sees_every_company_of_the_organization(client, admin, screen):
+    response = client.get(URL, headers=admin)
     items = {row["display_name"]: row for row in rows(response)}
 
     assert response.json()["data"]["total"] == 6
@@ -140,14 +138,14 @@ async def test_admin_sees_every_company_of_the_organization(client, admin, scree
     ],
     ids=["empresa", "nombre-comercial", "nit", "grupo", "compromisos", "estados"],
 )  # fmt: skip
-async def test_filters(client, admin, screen, params, expected):
+def test_filters(client, admin, screen, params, expected):
     assert [
-        row["display_name"] for row in rows(await client.get(URL, params=params, headers=admin))
+        row["display_name"] for row in rows(client.get(URL, params=params, headers=admin))
     ] == expected
 
 
-async def test_filter_by_group_shows_its_companies_together(client, admin, screen):
-    response = await client.get(
+def test_filter_by_group_shows_its_companies_together(client, admin, screen):
+    response = client.get(
         URL, params={"group_id": screen.muisca["company"]["group"]["id"]}, headers=admin
     )
     assert [row["display_name"] for row in rows(response)] == [
@@ -156,38 +154,39 @@ async def test_filter_by_group_shows_its_companies_together(client, admin, scree
     ]
 
 
-async def test_sort_and_pagination(client, admin, screen):
-    response = await client.get(URL, params={"sort": "-rut_generated_at", "size": 2}, headers=admin)
+def test_sort_and_pagination(client, admin, screen):
+    response = client.get(URL, params={"sort": "-rut_generated_at", "size": 2}, headers=admin)
     data = response.json()["data"]
     assert (data["total"], data["pages"], len(data["items"])) == (6, 3, 2)
 
-    last_page = await client.get(
+    last_page = client.get(
         URL, params={"sort": "-rut_generated_at", "size": 2, "page": 3}, headers=admin
     )
     # Sin fecha de generación va al final
     assert rows(last_page)[-1]["display_name"] == "Muisca Servicios SAS"
 
-    assert (await client.get(URL, params={"sort": "clave"}, headers=admin)).status_code == 400
-    assert (await client.get(URL, params={"status": "otro"}, headers=admin)).status_code == 422
+    assert (client.get(URL, params={"sort": "clave"}, headers=admin)).status_code == 400
+    assert (client.get(URL, params={"status": "otro"}, headers=admin)).status_code == 422
 
 
-async def test_partner_sees_only_the_companies_of_his_engagements(client, screen, team, firm):  # noqa: F811
+def test_partner_sees_only_the_companies_of_his_engagements(client, screen, team, firm):  # noqa: F811
     socio = auth_headers(team.socio, firm)
-    assert [row["display_name"] for row in rows(await client.get(URL, headers=socio))] == [
+    assert [row["display_name"] for row in rows(client.get(URL, headers=socio))] == [
         "Comercializadora Andina SAS"
     ]
 
 
-async def test_associate_without_engagements_sees_nothing(client, screen, staff):
-    asociado = await staff("asociado@jhrwise.com", SystemRole.ASOCIADO)
-    assert rows(await client.get(URL, headers=asociado)) == []
+def test_associate_without_engagements_sees_nothing(client, screen, staff):
+    # Sin compromisos asignados no tiene el permiso en ninguna parte (Identidad)
+    asociado = staff("asociado@jhrwise.com", SystemRole.ASOCIADO)
+    assert client.get(URL, headers=asociado).status_code == 403
 
 
-async def test_client_user_sees_only_its_company(client, screen, platform, firm, db_session):
+def test_client_user_sees_only_its_company(client, screen, platform, firm, db_session):
     """El usuario del cliente tiene su acceso en la firma (rol cliente) y ve solo las
     empresas que tiene asignadas (company_users), aunque estén en un grupo."""
-    laura = await platform.user("laura@muisca.co")
-    await platform.member(laura, firm, SystemRole.CLIENTE)
+    laura = platform.user("laura@muisca.co")
+    platform.member(laura, firm, SystemRole.CLIENTE)
     db_session.add(
         CompanyUser(
             company_id=UUID(screen.muisca["company"]["id"]),
@@ -196,22 +195,22 @@ async def test_client_user_sees_only_its_company(client, screen, platform, firm,
             user_id=laura,
         )
     )
-    await db_session.commit()
+    db_session.commit()
 
-    response = await client.get(URL, headers=auth_headers(laura, firm))
+    response = client.get(URL, headers=auth_headers(laura, firm))
     # Textiles Muisca SAS está en el grupo con Andina Zona Franca SAS, que no ve
     assert [row["display_name"] for row in rows(response)] == ["Textiles Muisca SAS"]
 
 
-async def test_requires_clientes_leer(client, screen, platform, firm):
-    outsider = auth_headers(await platform.user("externo@x.co"), firm)
-    assert (await client.get(URL)).status_code == 401
-    assert (await client.get(URL, headers=outsider)).status_code == 403
+def test_requires_clientes_leer(client, screen, platform, firm):
+    outsider = auth_headers(platform.user("externo@x.co"), firm)
+    assert (client.get(URL)).status_code == 401
+    assert (client.get(URL, headers=outsider)).status_code == 403
 
 
-async def test_deleted_companies_are_not_listed(client, admin, screen, db_session):
-    await db_session.execute(
+def test_deleted_companies_are_not_listed(client, admin, screen, db_session):
+    db_session.execute(
         text("UPDATE exogena.companies SET is_deleted = true WHERE nit = '900987654'")
     )
-    await db_session.commit()
-    assert (await client.get(URL, headers=admin)).json()["data"]["total"] == 5
+    db_session.commit()
+    assert (client.get(URL, headers=admin)).json()["data"]["total"] == 5

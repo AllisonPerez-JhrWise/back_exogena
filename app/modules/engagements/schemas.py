@@ -16,8 +16,8 @@ class EngagementIn(BaseModel):
     # Con zona horaria (p. ej. 2026-05-15T23:59:00-05:00): sin ella la hora sería ambigua
     start_date: AwareDatetime | None = Field(default=None, description="Fecha de inicio")
     due_date: AwareDatetime = Field(description="Fecha de vencimiento")
-    partner_user_id: UUID = Field(description="Socio (GET /members?role=socio)")
-    manager_user_id: UUID = Field(description="Gerente (GET /members?role=gerente)")
+    partner_user_id: UUID = Field(description="Socio: un miembro de la firma (Identidad)")
+    manager_user_id: UUID = Field(description="Gerente: un miembro de la firma (Identidad)")
 
 
 def check_no_repeated_engagements(items: list[EngagementIn]) -> None:
@@ -30,8 +30,11 @@ def check_no_repeated_engagements(items: list[EngagementIn]) -> None:
 
 
 class PersonRef(BaseModel):
+    """Una persona de Identidad. Este servicio solo guarda su id: el nombre lo tiene
+    Identidad (el front lo toma de GET /organizacion/miembros)."""
+
     user_id: UUID
-    full_name: str
+    full_name: str | None = None
 
 
 class EngagementRead(BaseModel):

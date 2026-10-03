@@ -1,3 +1,8 @@
+# De dónde sale wise-comun: "index" (CodeArtifact, para AWS) o "local" (la carpeta
+# ../wise-comun, que docker-compose.yml pasa como contexto adicional). Va antes del primer
+# FROM porque se usa para elegir una etapa.
+ARG WISE_COMUN_FROM=index
+
 # ── Build: instala las dependencias en un virtualenv aislado ─────────────────
 FROM python:3.12-slim AS builder
 
@@ -7,6 +12,21 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements/ /tmp/requirements/
 RUN pip install -r /tmp/requirements/base.txt
+
+# ── wise-comun desde CodeArtifact (AWS) ─────────────────────────────────────
+# El índice lleva el token dentro: entra como secreto y no como argumento, para que no
+# quede escrito en la imagen. Se construye con:
+#   docker build --secret id=indice,env=INDICE .   (INDICE = wise-erp-infra/ops/codeartifact.sh url)
+FROM builder AS wise-comun-index
+RUN --mount=type=secret,id=indice \
+    PIP_EXTRA_INDEX_URL="$(cat /run/secrets/indice)" pip install -r /tmp/requirements/wise-comun.txt
+
+# ── wise-comun desde la carpeta del Escritorio (solo desarrollo local) ───────────
+FROM builder AS wise-comun-local
+COPY --from=wise_comun . /tmp/wise-comun
+RUN pip install /tmp/wise-comun
+
+FROM wise-comun-${WISE_COMUN_FROM} AS deps
 
 # ── Runtime: imagen liviana, usuario sin privilegios (no root) ────────────────────────────────────
 FROM python:3.12-slim AS runtime
@@ -19,7 +39,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN useradd --create-home --uid 1000 app
 WORKDIR /app
 
-COPY --from=builder /opt/venv /opt/venv
+COPY --from=deps /opt/venv /opt/venv
 COPY --chown=app:app app ./app
 COPY --chown=app:app alembic ./alembic
 COPY --chown=app:app alembic.ini ./

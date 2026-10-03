@@ -1,44 +1,60 @@
-"""¿Quién está haciendo la petición?
+"""¿Quién hace la petición, en qué organización y qué puede hacer? (F0-02)
 
-Solo valida el token (Authorization: Bearer), no consulta la base de datos. El login no
-es de este servicio: lo hace la plataforma con Cognito. Los permisos dentro de un tenant
-se revisan en app.modules.platform.dependencies.
+Lo resuelve wise-comun, igual que en los demás servicios: valida el access token de
+Cognito, lee la organización del encabezado X-Organization-Id y le pregunta a Identidad
+(GET /autorizacion) quién es la persona, sus roles y sus asignaciones. Este servicio no
+lee las tablas de Identidad.
+
+Los endpoints exigen permisos, nunca roles: así cada organización cambia su matriz sin
+tocar el código. En Identidad "ver" no es un permiso aparte: es tener el permiso con nivel
+Consulta, por eso las lecturas piden `clientes.crear` con lectura=True.
 """
 
-from typing import Annotated
+from typing import Annotated, Final
 from uuid import UUID
 
 from fastapi import Depends
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
+from wise_comun.acceso import Decision
+from wise_comun.autorizacion import exige
+from wise_comun.deps import ContextoActual
 
-from app.core.config import settings
-from app.core.exceptions import UnauthorizedError
-from app.core.security import decode_access_token
+from app.core.exceptions import BadRequestError, ForbiddenError
 
-bearer_scheme = HTTPBearer(auto_error=False)
+# ── Permisos que usa este servicio (los define el catálogo de Identidad) ──
+CLIENTES_CREAR: Final = "clientes.crear"  # Crear clientes y compromisos, y asignar socio y gerente
+CLIENTES_ESTADO_CAMBIAR: Final = "clientes.estado.cambiar"  # Activar o inactivar clientes
 
 
 class Principal(BaseModel):
-    # id de public.users. Con Cognito, el token trae el cognito_sub y se traduce con
-    # la función app_usuario_por_sub de la plataforma.
+    """La persona que hace la petición. `id` es el de Identidad (no el sub de Cognito)."""
+
     id: UUID
     email: str | None = None
+    full_name: str | None = None
 
 
-async def get_current_principal(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-) -> Principal:
-    if not credentials:
-        if settings.auth_bypass:  # solo pruebas locales (ver Settings.auth_bypass)
-            return Principal(id=settings.dev_user_id)
-        raise UnauthorizedError()
+def get_current_principal(ctx: ContextoActual) -> Principal:
+    return Principal(id=ctx.user_id, email=ctx.email, full_name=ctx.full_name)
 
-    claims = decode_access_token(credentials.credentials)
-    try:
-        return Principal(id=claims["sub"], email=claims.get("email"))
-    except ValidationError:
-        raise UnauthorizedError("Invalid token") from None
+
+def get_organization_id(ctx: ContextoActual) -> UUID:
+    """La organización activa (la firma). Sin ella no hay permisos: 400."""
+    if ctx.organization_id is None:
+        raise BadRequestError("The X-Organization-Id header is required")
+    return ctx.organization_id
+
+
+def require_whole_organization(decision: Decision) -> None:
+    """Para lo que no es de una empresa existente (p. ej. crear un cliente nuevo): el
+    permiso tiene que alcanzar a toda la organización, no solo a sus compromisos."""
+    if not decision.toda_la_organizacion:
+        raise ForbiddenError()
 
 
 PrincipalDep = Annotated[Principal, Depends(get_current_principal)]
+OrganizationDep = Annotated[UUID, Depends(get_organization_id)]
+# Decisión de Identidad: si puede y sobre qué información (toda la organización, sus
+# compromisos o sus empresas). 403 si no tiene el permiso en ninguna parte
+CanCreateClientsDep = Annotated[Decision, Depends(exige(CLIENTES_CREAR))]
+CanReadClientsDep = Annotated[Decision, Depends(exige(CLIENTES_CREAR, lectura=True))]

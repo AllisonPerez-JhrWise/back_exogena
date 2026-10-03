@@ -1,9 +1,7 @@
-import asyncio
 from logging.config import fileConfig
 
-from sqlalchemy import pool
+from sqlalchemy import create_engine, pool
 from sqlalchemy.engine import Connection
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
 from app.core.config import settings
@@ -50,7 +48,7 @@ def _configure(**kwargs) -> None:
 def run_migrations_offline() -> None:
     """Genera el SQL sin conectarse: `alembic upgrade head --sql`."""
     _configure(
-        url=settings.alembic_database_url,
+        url=settings.admin_database_url,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -64,18 +62,15 @@ def do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 
-async def run_migrations_online() -> None:
-    engine = create_async_engine(
-        settings.alembic_database_url,
-        poolclass=pool.NullPool,
-        connect_args=settings.db_connect_args,
-    )
-    async with engine.connect() as connection:
-        await connection.run_sync(do_run_migrations)
-    await engine.dispose()
+def run_migrations_online() -> None:
+    # Con el dueño del schema exogena (DB_ADMIN_USER; vacío = DB_USER)
+    engine = create_engine(settings.admin_database_url, poolclass=pool.NullPool)
+    with engine.connect() as connection:
+        do_run_migrations(connection)
+    engine.dispose()
 
 
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    asyncio.run(run_migrations_online())
+    run_migrations_online()

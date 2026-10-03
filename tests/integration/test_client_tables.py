@@ -19,17 +19,16 @@ from app.modules.clients.models import (
 )
 
 
-async def save(session, *objs) -> None:
+def save(session, *objs) -> None:
     session.add_all(objs)
-    await session.flush()
+    session.flush()
 
 
-async def assert_rejected(session, *objs) -> None:
+def assert_rejected(session, *objs) -> None:
     """La base de datos debe rechazar estos registros (el savepoint aísla el error)."""
-    with pytest.raises(IntegrityError):
-        async with session.begin_nested():
-            session.add_all(objs)
-            await session.flush()
+    with pytest.raises(IntegrityError), session.begin_nested():
+        session.add_all(objs)
+        session.flush()
 
 
 def make_group(organization_id, name: str = "Grupo Muisca") -> Group:
@@ -45,17 +44,17 @@ def make_company(organization_id, nit: str = "900123456", **extra) -> Company:
     return Company(organization_id=organization_id, nit=nit, **{**values, **extra})
 
 
-async def test_group_with_companies_versions_and_users(db_session, firm, platform):
+def test_group_with_companies_versions_and_users(db_session, firm, platform):
     group = make_group(firm)
-    await save(db_session, group)
+    save(db_session, group)
     textiles = make_company(firm, "901223884", legal_name="Textiles Muisca SAS", group_id=group.id)
     zona_franca = make_company(
         firm, "901556201", legal_name="Textiles Muisca Zona Franca SAS", group_id=group.id
     )
     solo = make_company(firm, "800197268", legal_name="Andina SAS")  # sin grupo
-    await save(db_session, textiles, zona_franca, solo)
-    laura = await platform.user("laura@muisca.co")
-    await save(
+    save(db_session, textiles, zona_franca, solo)
+    laura = platform.user("laura@muisca.co")
+    save(
         db_session,
         *(CompanyTaxResponsibility(company_id=textiles.id, code=c) for c in ("05", "48")),
         CompanyRutVersion(company_id=textiles.id, generated_at=date(2026, 9, 5)),
@@ -65,12 +64,12 @@ async def test_group_with_companies_versions_and_users(db_session, firm, platfor
     )
 
 
-async def test_group_name_is_unique_in_the_organization(db_session, firm, platform):
-    await save(db_session, make_group(firm, "Grupo Sacyr"))
+def test_group_name_is_unique_in_the_organization(db_session, firm, platform):
+    save(db_session, make_group(firm, "Grupo Sacyr"))
     # El mismo grupo escrito distinto: misma clave, no se permite
-    await assert_rejected(db_session, make_group(firm, "  GRUPO   sacýr "))
+    assert_rejected(db_session, make_group(firm, "  GRUPO   sacýr "))
     # En otra firma sí
-    await save(db_session, make_group(await platform.tenant("otra-firma"), "Grupo Sacyr"))
+    save(db_session, make_group(platform.tenant("otra-firma"), "Grupo Sacyr"))
 
 
 def test_group_name_key():
@@ -78,23 +77,23 @@ def test_group_name_key():
     assert group_name_key("Ñandú S.A.S") == "nandu s.a.s"
 
 
-async def test_company_requires_existing_group(db_session, firm):
-    await assert_rejected(db_session, make_company(firm, group_id=uuid4()))
+def test_company_requires_existing_group(db_session, firm):
+    assert_rejected(db_session, make_company(firm, group_id=uuid4()))
 
 
-async def test_nit_is_unique_in_the_organization(db_session, firm):
+def test_nit_is_unique_in_the_organization(db_session, firm):
     first = make_company(firm)
-    await save(db_session, first)
-    await assert_rejected(db_session, make_company(firm))
+    save(db_session, first)
+    assert_rejected(db_session, make_company(firm))
 
     # Con borrado lógico, el NIT se puede volver a usar
     first.is_deleted = True
-    await save(db_session, first, make_company(firm))
+    save(db_session, first, make_company(firm))
 
 
-async def test_same_nit_in_another_organization(db_session, platform):
+def test_same_nit_in_another_organization(db_session, platform):
     for firm_slug in ("firma-1", "firma-2"):
-        await save(db_session, make_company(await platform.tenant(firm_slug)))
+        save(db_session, make_company(platform.tenant(firm_slug)))
 
 
 @pytest.mark.parametrize(
@@ -108,13 +107,13 @@ async def test_same_nit_in_another_organization(db_session, platform):
         ("main_activity_code", "47"),
     ],
 )
-async def test_company_formats_are_enforced(db_session, firm, field, value):
-    await assert_rejected(db_session, make_company(firm, **{field: value}))
+def test_company_formats_are_enforced(db_session, firm, field, value):
+    assert_rejected(db_session, make_company(firm, **{field: value}))
 
 
-async def test_name_depends_on_person_type(db_session, firm):
-    await assert_rejected(db_session, make_company(firm, legal_name=None))
-    await assert_rejected(
+def test_name_depends_on_person_type(db_session, firm):
+    assert_rejected(db_session, make_company(firm, legal_name=None))
+    assert_rejected(
         db_session,
         make_company(firm, person_type=PersonType.NATURAL, legal_name=None, first_name="Juan"),
     )
@@ -126,21 +125,21 @@ async def test_name_depends_on_person_type(db_session, firm):
         first_name="Juan",
         last_name="Restrepo",
     )
-    await save(db_session, natural)
+    save(db_session, natural)
     assert natural.display_name == "Juan Restrepo"
 
 
-async def test_company_user_rules(db_session, firm):
+def test_company_user_rules(db_session, firm):
     andina, otra = make_company(firm), make_company(firm, "800197268")
-    await save(db_session, andina, otra)
-    await save(db_session, CompanyUser(company_id=andina.id, email="ana@x.co", full_name="Ana"))
+    save(db_session, andina, otra)
+    save(db_session, CompanyUser(company_id=andina.id, email="ana@x.co", full_name="Ana"))
     # La misma persona no se repite en una empresa, pero sí puede estar en otra
-    await assert_rejected(
+    assert_rejected(
         db_session, CompanyUser(company_id=andina.id, email="ana@x.co", full_name="Ana")
     )
-    await save(db_session, CompanyUser(company_id=otra.id, email="ana@x.co", full_name="Ana"))
+    save(db_session, CompanyUser(company_id=otra.id, email="ana@x.co", full_name="Ana"))
     # El correo se guarda en minúsculas
-    await assert_rejected(
+    assert_rejected(
         db_session, CompanyUser(company_id=andina.id, email="Luis@X.co", full_name="Luis")
     )
 

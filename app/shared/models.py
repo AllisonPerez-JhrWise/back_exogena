@@ -74,7 +74,7 @@ class BaseTable(SQLModel, metaclass=AutoTableMeta):
         nullable=True,
     )
 
-    # id de public.users, sin FK: son solo auditoría y no deben impedir nada en la plataforma
+    # id de la persona en Identidad, sin FK: son solo auditoría (otro servicio, otro schema)
     created_by: UUID | None = Field(default=None, nullable=True)
     updated_by: UUID | None = Field(default=None, nullable=True)
 

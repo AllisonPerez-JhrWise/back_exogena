@@ -6,7 +6,7 @@ from typing import Any, ClassVar, Generic, TypeVar
 from uuid import UUID
 
 from sqlalchemy import ColumnElement, func
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 from sqlmodel import select
 from sqlmodel.sql.expression import SelectOfScalar
 
@@ -26,45 +26,45 @@ class BaseRepository(Generic[ModelT]):
     sortable_fields: ClassVar[frozenset[str]] = frozenset({"created_at", "updated_at"})
     default_sort: ClassVar[str] = "-created_at"
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: Session):
         self.session = session
 
     def base_query(self) -> SelectOfScalar[ModelT]:
         return select(self.model).where(self.model.is_deleted.is_(False))
 
-    async def get(self, item_id: UUID, *conditions: ColumnElement[bool]) -> ModelT | None:
+    def get(self, item_id: UUID, *conditions: ColumnElement[bool]) -> ModelT | None:
         query = self.base_query().where(self.model.id == item_id, *conditions)
-        result = await self.session.execute(query)
+        result = self.session.execute(query)
         return result.scalars().first()
 
-    async def list(
+    def list(
         self, *conditions: ColumnElement[bool], params: PageParams
     ) -> tuple[Sequence[ModelT], int]:
         query = self.base_query().where(*conditions)
 
-        total = await self.session.scalar(select(func.count()).select_from(query.subquery()))
+        total = self.session.scalar(select(func.count()).select_from(query.subquery()))
         query = query.order_by(*self._order_by(params.sort or self.default_sort))
-        result = await self.session.execute(query.offset(params.offset).limit(params.size))
+        result = self.session.execute(query.offset(params.offset).limit(params.size))
         return result.scalars().all(), total or 0
 
-    async def add(self, obj: ModelT) -> ModelT:
+    def add(self, obj: ModelT) -> ModelT:
         self.session.add(obj)
-        await self.session.flush()
-        await self.session.refresh(obj)
+        self.session.flush()
+        self.session.refresh(obj)
         return obj
 
-    async def update(self, obj: ModelT, values: dict[str, Any]) -> ModelT:
+    def update(self, obj: ModelT, values: dict[str, Any]) -> ModelT:
         for field, value in values.items():
             setattr(obj, field, value)
         self.session.add(obj)
-        await self.session.flush()
-        await self.session.refresh(obj)
+        self.session.flush()
+        self.session.refresh(obj)
         return obj
 
-    async def soft_delete(self, obj: ModelT) -> None:
+    def soft_delete(self, obj: ModelT) -> None:
         obj.is_deleted = True
         self.session.add(obj)
-        await self.session.flush()
+        self.session.flush()
 
     def _order_by(self, sort: str) -> list[Any]:
         field = sort.lstrip("-")

@@ -50,3 +50,12 @@ class BusinessRuleError(AppError):
     status_code = 422
     code = "business_rule"
     message = "Business rule violated"
+
+
+class ServiceUnavailableError(AppError):
+    """Otro servicio de la plataforma (p. ej. Identidad) no respondió. El usuario vuelve a
+    intentar: no se reintenta solo."""
+
+    status_code = 503
+    code = "service_unavailable"
+    message = "Service unavailable"

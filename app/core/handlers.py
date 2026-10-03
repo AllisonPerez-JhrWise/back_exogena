@@ -22,8 +22,21 @@ async def app_error_handler(request: Request, exc: AppError):
     return error_response(exc.status_code, exc.message, exc.code, exc.details)
 
 
+# Los errores que lanza wise-comun (token, organización, permisos, consentimiento) llegan
+# como HTTPException: se les pone el mismo código que a los propios del servicio
+HTTP_CODES = {
+    400: "bad_request",
+    401: "unauthorized",
+    403: "forbidden",
+    404: "not_found",
+    451: "consent_required",
+    503: "service_unavailable",
+}
+
+
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-    return error_response(exc.status_code, str(exc.detail), "http_error", headers=exc.headers)
+    code = HTTP_CODES.get(exc.status_code, "http_error")
+    return error_response(exc.status_code, str(exc.detail), code, headers=exc.headers)
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):

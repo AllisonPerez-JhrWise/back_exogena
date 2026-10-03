@@ -1,10 +1,10 @@
 from enum import StrEnum
 from functools import lru_cache
-from typing import Any
 from uuid import UUID
 
-from pydantic import Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import model_validator
+from sqlalchemy.engine import URL
+from wise_comun.config import AjustesBase, registrar
 
 
 class Environment(StrEnum):
@@ -14,10 +14,12 @@ class Environment(StrEnum):
     PRODUCTION = "production"
 
 
-class Settings(BaseSettings):
-    """Única fuente de configuración. Cada valor viene de variables de entorno / .env."""
+class Settings(AjustesBase):
+    """Única fuente de configuración. Cada valor viene de variables de entorno / .env.
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    Lo común a todos los servicios —base de datos por partes (DB_HOST, DB_USER…), Cognito,
+    dirección de Identidad— viene de `AjustesBase` de wise-comun, como en wise-auth. Aquí
+    queda solo lo de exógena."""
 
     # ── App ──────────────────────────────────────────────────────────────
     app_name: str = "back_exogena"
@@ -26,36 +28,24 @@ class Settings(BaseSettings):
     api_v1_prefix: str = "/api/v1"
 
     # ── Base de datos ─────────────────────────────────────────────────────────
-    # Debe usar el driver async: postgresql+asyncpg://usuario:clave@host:5432/bd
-    # Con el que corre la app. En AWS es wiseerp_app: puede usar las funciones app_* de la
-    # plataforma y la seguridad por filas (RLS) le aplica.
-    database_url: str
-    # Con el que corren las migraciones (dueño del schema exogena). Vacío = database_url
-    migration_database_url: str | None = None
+    # Schema propio del servicio (wise-comun lo pone como search_path)
+    db_schema: str = "exogena"
     # Por proceso. Conexiones totales = pool_size + max_overflow, por cada worker/tarea
     db_pool_size: int = 5
     db_max_overflow: int = 5
     db_pool_recycle_seconds: int = 1800
-    # Modo SSL de asyncpg: disable | prefer | require | verify-ca | verify-full
-    db_ssl_mode: str | None = None
     db_echo: bool = False
     # Tabla de versiones de Alembic propia: la base de datos RDS se comparte con otros servicios
     db_version_table: str = "alembic_version_exogena"
 
-    # ── Autenticación ─────────────────────────────────────────────────────────────
-    # El login no es de este servicio: lo hace la plataforma con Cognito.
-    # PROVISIONAL hasta tener los datos de Cognito: tokens HS256 firmados con este secreto.
-    jwt_secret: str = Field(min_length=32)
-    jwt_algorithm: str = "HS256"
-    # Encabezado con el tenant (organización) en el que trabaja el usuario
-    tenant_header: str = "X-Tenant-Id"
-    # SOLO PARA PRUEBAS mientras llegan Cognito y el tenant: sin token se actúa como
-    # dev_user_id, sin X-Tenant-Id se ve todo y no se revisan permisos. Prohibido en producción.
+    # ── Autenticación (la valida wise-comun: token de Cognito + Identidad) ───────────
+    # SOLO DESARROLLO LOCAL, para usar la API sin usuario de la plataforma: sin token ni
+    # Identidad, se actúa como dev_user_id, Administrador de la organización del encabezado
+    # X-Organization-Id (o de dev_organization_id si no llega). Prohibido en producción.
     auth_bypass: bool = False
     dev_user_id: UUID = UUID(int=0)
-    # Con AUTH_BYPASS, tenant que se usa si no llega X-Tenant-Id (la firma de `make seed`).
-    # Vacío = sin tenant: se ve todo, pero lo que necesita una organización responde 400.
-    dev_tenant_id: UUID | None = None
+    # La firma de `make seed`
+    dev_organization_id: UUID | None = None
 
     # ── Reglas del RUT (parámetros de la tarea; F0-09 aún no existe en la plataforma) ──
     # rut.dias_generacion_maxima: antigüedad máxima del PDF al cargar el RUT actual
@@ -71,19 +61,22 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.environment == Environment.PRODUCTION
 
-    @property
-    def alembic_database_url(self) -> str:
-        return self.migration_database_url or self.database_url
-
-    @property
-    def db_connect_args(self) -> dict[str, Any]:
-        return {"ssl": self.db_ssl_mode} if self.db_ssl_mode else {}
+    def _url(self, usuario: str, clave: str) -> str:
+        """Reemplaza el de AjustesBase, que pega la contraseña tal cual en el texto: una
+        contraseña con @, /, # o : rompería la dirección. URL.create la escapa. Como
+        database_url y admin_database_url (y wise_comun.db) la usan, todos quedan bien."""
+        return URL.create(
+            "postgresql+psycopg",
+            username=usuario,
+            password=clave,
+            host=self.db_host,
+            port=self.db_port,
+            database=self.db_name,
+            query={"sslmode": self.db_sslmode},
+        ).render_as_string(hide_password=False)
 
     @model_validator(mode="after")
     def _check_consistency(self) -> "Settings":
-        for url in (self.database_url, self.migration_database_url):
-            if url and not url.startswith("postgresql+asyncpg://"):
-                raise ValueError("Database URLs must use the postgresql+asyncpg:// driver")
         if self.is_production and "*" in self.cors_origins:
             raise ValueError("CORS_ORIGINS cannot contain '*' in production")
         if self.is_production and self.auth_bypass:
@@ -93,7 +86,10 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return Settings()  # type: ignore[call-arg]
 
+
+# wise-comun lee los ajustes de aquí (lo mismo que hace wise-auth en su config.py)
+registrar(get_settings)
 
 settings = get_settings()

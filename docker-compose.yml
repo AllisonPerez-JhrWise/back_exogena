@@ -1,7 +1,13 @@
 # Solo para desarrollo local. En AWS la app corre desde el Dockerfile contra la RDS.
 services:
   app:
-    build: .
+    build:
+      context: .
+      # wise-comun desde la carpeta de al lado (sin CodeArtifact): ver Dockerfile
+      additional_contexts:
+        wise_comun: ../wise-comun
+      args:
+        WISE_COMUN_FROM: local
     image: back-exogena
     container_name: back-exogena-app
     user: root

@@ -1,0 +1,4 @@
+# Plumbing compartida de wise-erp (sesión con RLS, tokens de Cognito, permisos, CORS, logs).
+# No está en PyPI: en AWS se instala del CodeArtifact de la cuenta y en local desde la
+# carpeta ../wise-comun (ver Dockerfile y docker-compose.yml).
+wise-comun>=0.2.4

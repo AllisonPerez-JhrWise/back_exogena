@@ -74,15 +74,15 @@ app/
 
 ### Authentication
 
-- Login is **not** part of this service: the platform handles it with AWS Cognito. This service only validates `Authorization: Bearer <token>`. Until the Cognito settings are available, tokens are provisional HS256 tokens signed with `JWT_SECRET` (`app/core/security.py`).
-- `PrincipalDep` only validates the token (no DB hit).
-- The front sends the tenant it works in with `X-Tenant-Id`. `require_permission(...)` (`app/modules/platform/dependencies.py`) checks the permission through the platform memberships and sets the row-level security context (`app.user_id`, `app.tenant_id`) for the rest of the request.
+- Login is **not** part of this service: the platform handles it with AWS Cognito. Like every service, it uses `wise-comun`: it validates the Cognito **access token** (`Authorization: Bearer <token>`), reads the active organization from `X-Organization-Id` and asks Identidad (`GET /autorizacion`, at `IDENTIDAD_URL`) who the person is, their roles and assignments. This service never reads Identidad's tables.
+- Endpoints require **permissions, never roles**: `exige(permiso)` (see `app/core/auth.py`). Reading is having the permission at level *Consulta* (`exige(..., lectura=True)`). The `Decision` it returns says the scope (whole organization, their engagements or their companies), which filters the clients screen.
+- The DB session is `wise_comun.db`: it sets the row-level security context (`app.user_id`, `app.organization_id`) per transaction.
+- **Local development without a platform user:** `AUTH_BYPASS=true` (never in production) acts as Administrator of `DEV_ORGANIZATION_ID` without a token (`app/core/dev_access.py`). Tests use an in-memory double of Identidad (`tests/integration/identity.py`).
 
-### Platform tables
+### Identidad data
 
-- `users`, `tenants`, `roles`, `memberships`, `membership_roles`, `permissions`… live in `public` and belong to the platform service (its own Alembic). They have row-level security.
-- `app/modules/platform/models.py` describes them so we can query them and point FKs at them; `alembic/env.py` excludes them from our migrations.
-- This service never writes to the platform tables: people and memberships are created by Identidad (`POST /organizacion/miembros`). Our tables store platform IDs (organization, users) **without foreign keys**, like every service of the platform. The app connects as `wiseerp_app` (`DATABASE_URL`); migrations run as the owner of `exogena` (`MIGRATION_DATABASE_URL`).
+- People, organizations, roles, memberships and assignments belong to Identidad (wise-auth, schema `identidad`). People and memberships are created there (`POST /organizacion/miembros`). Our tables store their IDs (organization, users) **without foreign keys**, like every service of the platform.
+- The app connects with `DB_USER`; migrations run as the owner of `exogena` (`DB_ADMIN_USER`).
 
 ## Adding a new module
 
