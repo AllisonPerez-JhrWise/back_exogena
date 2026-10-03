@@ -12,9 +12,9 @@ def medellin(**changes) -> Municipality:
     return Municipality(**{**data, **changes})
 
 
-async def test_codes_keep_leading_zeros(db_session):
+def test_codes_keep_leading_zeros(db_session):
     """Regla del acuerdo: los códigos son texto y los ceros a la izquierda se conservan."""
-    await save(
+    save(
         db_session,
         Department(code="05", name="Antioquia", year_from=2025),
         medellin(),
@@ -22,9 +22,9 @@ async def test_codes_keep_leading_zeros(db_session):
     )
     db_session.expunge_all()
 
-    assert await db_session.scalar(select(Department.code)) == "05"
-    assert await db_session.scalar(select(Municipality.code)) == "05001"
-    assert await db_session.scalar(select(Country.code)) == "013"
+    assert db_session.scalar(select(Department.code)) == "05"
+    assert db_session.scalar(select(Municipality.code)) == "05001"
+    assert db_session.scalar(select(Country.code)) == "013"
 
 
 @pytest.mark.parametrize(
@@ -40,12 +40,12 @@ async def test_codes_keep_leading_zeros(db_session):
     ids=["municipio-sin-cero", "otro-departamento", "vigencia-al-reves", "depto-1-digito",
          "pais-2-digitos", "tipo-con-letras"],
 )  # fmt: skip
-async def test_formats_are_enforced(db_session, obj):
-    await assert_rejected(db_session, obj)
+def test_formats_are_enforced(db_session, obj):
+    assert_rejected(db_session, obj)
 
 
-async def test_same_code_once_per_list_but_again_in_a_new_one(db_session):
+def test_same_code_once_per_list_but_again_in_a_new_one(db_session):
     """Una lista nueva de la DIAN repite los códigos con otro año de inicio."""
-    await save(db_session, medellin(year_to=2025))
-    await assert_rejected(db_session, medellin())
-    await save(db_session, medellin(year_from=2026))
+    save(db_session, medellin(year_to=2025))
+    assert_rejected(db_session, medellin())
+    save(db_session, medellin(year_from=2026))

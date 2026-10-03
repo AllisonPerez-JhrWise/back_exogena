@@ -8,9 +8,9 @@ from tests.integration.test_client_tables import assert_rejected, make_company, 
 
 
 @pytest.fixture
-async def company(db_session, firm):
+def company(db_session, firm):
     company = make_company(firm)
-    await save(db_session, company)
+    save(db_session, company)
     return company
 
 
@@ -31,18 +31,18 @@ def person(company, **changes) -> ThirdParty:
     return ThirdParty(**{**data, **changes})
 
 
-async def test_identification_keeps_leading_zeros(db_session, company):
+def test_identification_keeps_leading_zeros(db_session, company):
     """Prueba obligatoria del acuerdo: 0012345 se guarda y se lee como 0012345."""
-    await save(db_session, person(company))
+    save(db_session, person(company))
     db_session.expunge_all()
 
-    saved = await db_session.scalar(select(ThirdParty))
+    saved = db_session.scalar(select(ThirdParty))
     assert saved.identification_number == "0012345"
     assert (saved.country_code, saved.department_code, saved.city_code) == ("169", "05", "05001")
 
 
-async def test_company_with_nit_and_check_digit(db_session, company):
-    await save(
+def test_company_with_nit_and_check_digit(db_session, company):
+    save(
         db_session,
         person(
             company,
@@ -58,15 +58,13 @@ async def test_company_with_nit_and_check_digit(db_session, company):
     )
 
 
-async def test_passport_can_have_letters(db_session, company):
-    await save(
-        db_session, person(company, identification_type="41", identification_number="AB123456")
-    )
+def test_passport_can_have_letters(db_session, company):
+    save(db_session, person(company, identification_type="41", identification_number="AB123456"))
 
 
-async def test_incomplete_data_is_saved_for_the_review_to_find(db_session, company):
+def test_incomplete_data_is_saved_for_the_review_to_find(db_session, company):
     """Sin apellido ni ubicación: se guarda; la revisión de exógena lo muestra como hallazgo."""
-    await save(
+    save(
         db_session,
         person(
             company,
@@ -93,17 +91,17 @@ async def test_incomplete_data_is_saved_for_the_review_to_find(db_session, compa
     ids=["puntos", "guion", "espacio", "tipo-con-letras", "dv-letra", "pais-letras",
          "depto-sin-cero", "ciudad-sin-cero"],
 )  # fmt: skip
-async def test_formats_are_enforced(db_session, company, changes):
-    await assert_rejected(db_session, person(company, **changes))
+def test_formats_are_enforced(db_session, company, changes):
+    assert_rejected(db_session, person(company, **changes))
 
 
-async def test_same_third_party_once_per_company(db_session, company, firm):
-    await save(db_session, person(company))
-    await assert_rejected(db_session, person(company))
+def test_same_third_party_once_per_company(db_session, company, firm):
+    save(db_session, person(company))
+    assert_rejected(db_session, person(company))
 
     # El mismo número con otro tipo es otro tercero
-    await save(db_session, person(company, identification_type="12"))
+    save(db_session, person(company, identification_type="12"))
     # Y el mismo tercero puede estar en otro cliente
     other = make_company(firm, "800197268", check_digit="4")
-    await save(db_session, other)
-    await save(db_session, person(other))
+    save(db_session, other)
+    save(db_session, person(other))

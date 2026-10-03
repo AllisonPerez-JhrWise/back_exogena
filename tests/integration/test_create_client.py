@@ -86,18 +86,18 @@ def payload(**changes) -> dict:
     return data
 
 
-async def count(session, model, *conditions) -> int:
-    return await session.scalar(select(func.count()).select_from(model).where(*conditions))
+def count(session, model, *conditions) -> int:
+    return session.scalar(select(func.count()).select_from(model).where(*conditions))
 
 
-async def create(client, headers, **changes) -> dict:
-    response = await client.post(URL, json=payload(**changes), headers=headers)
+def create(client, headers, **changes) -> dict:
+    response = client.post(URL, json=payload(**changes), headers=headers)
     assert response.status_code == 201, response.text
     return response.json()["data"]
 
 
-async def test_new_client_without_group(client, admin, db_session):
-    response = await client.post(URL, json=PAYLOAD, headers=admin)
+def test_new_client_without_group(client, admin, db_session):
+    response = client.post(URL, json=PAYLOAD, headers=admin)
 
     assert response.status_code == 201, response.text
     data = response.json()["data"]
@@ -112,11 +112,11 @@ async def test_new_client_without_group(client, admin, db_session):
     assert (company["rut_generated_at"], company["rut_updated_at"]) == (GENERATED, "2026-09-12")
 
     # El cliente es un registro de la firma: no se crea ningún tenant ni ningún grupo
-    assert await count(db_session, Tenant, Tenant.kind == TenantKind.CLIENT) == 0
-    assert await count(db_session, Group) == 0
+    assert count(db_session, Tenant, Tenant.kind == TenantKind.CLIENT) == 0
+    assert count(db_session, Group) == 0
 
     # Primera versión del RUT, con sus dos fechas y el año gravable que cubre
-    version = (await db_session.execute(select(CompanyRutVersion))).scalar_one()
+    version = (db_session.execute(select(CompanyRutVersion))).scalar_one()
     assert (version.generated_at.isoformat(), version.covers_tax_year) == (GENERATED, 2026)
     assert version.is_historical is False
 
@@ -125,22 +125,22 @@ async def test_new_client_without_group(client, admin, db_session):
         ("Paula Córdoba", "Contadora", "+57 310 555 4321", None),
         ("Carlos Mejía", "Revisor fiscal", "+57 315 222 1098", None),
     ]
-    assert await count(db_session, CompanyUser) == 2
+    assert count(db_session, CompanyUser) == 2
 
 
-async def test_new_group_is_created_with_the_company(client, admin, db_session):
-    data = await create(client, admin, group_name="Grupo Andina")
+def test_new_group_is_created_with_the_company(client, admin, db_session):
+    data = create(client, admin, group_name="Grupo Andina")
 
     assert data["company"]["group"]["name"] == "Grupo Andina"
-    group = await db_session.get(Group, UUID(data["company"]["group"]["id"]))
+    group = db_session.get(Group, UUID(data["company"]["group"]["id"]))
     assert group.name_key == "grupo andina"
 
 
-async def test_company_joins_an_existing_group(client, admin, db_session):
-    first = await create(client, admin, group_name="Grupo Andina")
+def test_company_joins_an_existing_group(client, admin, db_session):
+    first = create(client, admin, group_name="Grupo Andina")
     group_id = first["company"]["group"]["id"]
 
-    second = await create(
+    second = create(
         client,
         admin,
         group_id=group_id,
@@ -152,18 +152,18 @@ async def test_company_joins_an_existing_group(client, admin, db_session):
     assert second["company"]["group"]["id"] == group_id
     # Los datos de contacto y los usuarios son de cada empresa
     assert second["company"]["contact_name"] == "Otra persona"
-    assert await count(db_session, Group) == 1
-    assert await count(db_session, Company, Company.group_id == UUID(group_id)) == 2
+    assert count(db_session, Group) == 1
+    assert count(db_session, Company, Company.group_id == UUID(group_id)) == 2
     carlos = select(CompanyUser.position).where(
         CompanyUser.email == "carlos.mejia@revisoria.com.co"
     )
-    assert sorted(await db_session.scalars(carlos)) == ["Revisor fiscal", "Revisor fiscal suplente"]
+    assert sorted(db_session.scalars(carlos)) == ["Revisor fiscal", "Revisor fiscal suplente"]
 
 
-async def test_same_group_written_differently_is_not_duplicated(client, admin, db_session):
-    first = await create(client, admin, group_name="Grupo Andina")
+def test_same_group_written_differently_is_not_duplicated(client, admin, db_session):
+    first = create(client, admin, group_name="Grupo Andina")
 
-    response = await client.post(
+    response = client.post(
         URL, json=payload(group_name="  GRUPO   ándina ", rut=OTHER_COMPANY_RUT), headers=admin
     )
 
@@ -173,37 +173,37 @@ async def test_same_group_written_differently_is_not_duplicated(client, admin, d
         "group_id": first["company"]["group"]["id"],
         "name": "Grupo Andina",
     }
-    assert await count(db_session, Company) == 1  # la segunda empresa no se creó
+    assert count(db_session, Company) == 1  # la segunda empresa no se creó
 
 
-async def test_group_id_and_group_name_are_exclusive(client, admin):
+def test_group_id_and_group_name_are_exclusive(client, admin):
     body = payload(group_id=str(uuid4()), group_name="Grupo X")
-    response = await client.post(URL, json=body, headers=admin)
+    response = client.post(URL, json=body, headers=admin)
     assert response.status_code == 422
     assert "not both" in str(response.json()["details"])
 
 
-async def test_group_of_another_organization_is_not_found(client, admin, platform):
-    other_firm = await platform.tenant("otra-firma")
-    other_admin = await platform.user("admin@otra.co")
-    await platform.member(other_admin, other_firm, SystemRole.ADMINISTRADOR)
-    foreign = await create(client, auth_headers(other_admin, other_firm), group_name="Grupo Andina")
+def test_group_of_another_organization_is_not_found(client, admin, platform):
+    other_firm = platform.tenant("otra-firma")
+    other_admin = platform.user("admin@otra.co")
+    platform.member(other_admin, other_firm, SystemRole.ADMINISTRADOR)
+    foreign = create(client, auth_headers(other_admin, other_firm), group_name="Grupo Andina")
 
-    response = await client.post(
+    response = client.post(
         URL,
         json=payload(group_id=foreign["company"]["group"]["id"], rut=OTHER_COMPANY_RUT),
         headers=admin,
     )
     assert response.status_code == 404
-    unknown = await client.post(URL, json=payload(group_id=str(uuid4())), headers=admin)
+    unknown = client.post(URL, json=payload(group_id=str(uuid4())), headers=admin)
     assert unknown.status_code == 404
 
 
-async def test_steps_3_and_4_are_optional(client, admin):
+def test_steps_3_and_4_are_optional(client, admin):
     body = payload(users=[])
     del body["organization"]
 
-    response = await client.post(URL, json=body, headers=admin)
+    response = client.post(URL, json=body, headers=admin)
 
     assert response.status_code == 201, response.text
     data = response.json()["data"]
@@ -211,39 +211,39 @@ async def test_steps_3_and_4_are_optional(client, admin):
     assert data["company"]["trade_name"] is None
 
 
-async def test_requires_clientes_crear_in_the_organization(client, staff, platform):
-    assert (await client.post(URL, json=PAYLOAD)).status_code == 401
+def test_requires_clientes_crear_in_the_organization(client, staff, platform):
+    assert (client.post(URL, json=PAYLOAD)).status_code == 401
 
-    admin = await staff("admin@jhrwise.com", SystemRole.ADMINISTRADOR)
+    admin = staff("admin@jhrwise.com", SystemRole.ADMINISTRADOR)
     no_tenant = {"Authorization": admin["Authorization"]}
-    assert (await client.post(URL, json=PAYLOAD, headers=no_tenant)).status_code == 400
+    assert (client.post(URL, json=PAYLOAD, headers=no_tenant)).status_code == 400
 
     # Un asociado puede consultar clientes, pero no crearlos
-    asociado = await staff("asociado@jhrwise.com", SystemRole.ASOCIADO)
-    response = await client.post(URL, json=PAYLOAD, headers=asociado)
+    asociado = staff("asociado@jhrwise.com", SystemRole.ASOCIADO)
+    response = client.post(URL, json=PAYLOAD, headers=asociado)
     assert response.status_code == 403
     assert response.json()["code"] == "forbidden"
 
-    revoked = await staff("ex@jhrwise.com", SystemRole.ADMINISTRADOR, MembershipStatus.REVOKED)
-    assert (await client.post(URL, json=PAYLOAD, headers=revoked)).status_code == 403
+    revoked = staff("ex@jhrwise.com", SystemRole.ADMINISTRADOR, MembershipStatus.REVOKED)
+    assert (client.post(URL, json=PAYLOAD, headers=revoked)).status_code == 403
 
-    other = await platform.tenant("otra-firma")
+    other = platform.tenant("otra-firma")
     headers = {**admin, "X-Tenant-Id": str(other)}
-    assert (await client.post(URL, json=PAYLOAD, headers=headers)).status_code == 403
+    assert (client.post(URL, json=PAYLOAD, headers=headers)).status_code == 403
 
 
-async def test_nit_is_unique_in_the_organization(client, admin, platform):
-    company_id = (await create(client, admin))["company"]["id"]
+def test_nit_is_unique_in_the_organization(client, admin, platform):
+    company_id = (create(client, admin))["company"]["id"]
 
-    again = await client.post(URL, json=payload(users=[]), headers=admin)
+    again = client.post(URL, json=payload(users=[]), headers=admin)
     assert again.status_code == 409
     assert again.json()["details"] == {"cause": "nit_exists", "company_id": company_id}
 
     # Otra firma sí puede tener el mismo NIT como cliente suyo
-    other_firm = await platform.tenant("otra-firma")
-    other_admin = await platform.user("admin@otra.co")
-    await platform.member(other_admin, other_firm, SystemRole.ADMINISTRADOR)
-    await create(client, auth_headers(other_admin, other_firm), users=[])
+    other_firm = platform.tenant("otra-firma")
+    other_admin = platform.user("admin@otra.co")
+    platform.member(other_admin, other_firm, SystemRole.ADMINISTRADOR)
+    create(client, auth_headers(other_admin, other_firm), users=[])
 
 
 @pytest.mark.parametrize(
@@ -259,23 +259,23 @@ async def test_nit_is_unique_in_the_organization(client, admin, platform):
     ],
     ids=["cancelado", "suspendido", "mas-de-30-dias", "fecha-futura"],
 )
-async def test_rut_rules_block_the_creation(client, admin, db_session, rut, cause):
-    response = await client.post(URL, json=payload(rut=rut, group_name="Grupo X"), headers=admin)
+def test_rut_rules_block_the_creation(client, admin, db_session, rut, cause):
+    response = client.post(URL, json=payload(rut=rut, group_name="Grupo X"), headers=admin)
 
     assert response.status_code == 422
     assert response.json()["details"]["cause"] == cause
-    assert await count(db_session, Company) == 0
-    assert await count(db_session, Group) == 0
+    assert count(db_session, Company) == 0
+    assert count(db_session, Group) == 0
 
 
-async def test_rut_of_exactly_30_days_is_accepted(client, admin):
+def test_rut_of_exactly_30_days_is_accepted(client, admin):
     thirty = (date.today() - timedelta(days=30)).isoformat()
-    await create(client, admin, rut={"generated_at": thirty})
+    create(client, admin, rut={"generated_at": thirty})
 
 
-async def test_rut_too_old_tells_how_many_days(client, admin):
+def test_rut_too_old_tells_how_many_days(client, admin):
     old = (date.today() - timedelta(days=45)).isoformat()
-    response = await client.post(URL, json=payload(rut={"generated_at": old}), headers=admin)
+    response = client.post(URL, json=payload(rut={"generated_at": old}), headers=admin)
     assert response.json()["details"] == {"cause": "rut_too_old", "days": 45, "max_days": 30}
 
 
@@ -307,16 +307,16 @@ async def test_rut_too_old_tells_how_many_days(client, admin):
         "grupo-vacio",
     ],
 )
-async def test_invalid_payload_is_rejected(client, admin, db_session, changes, expected):
-    response = await client.post(URL, json=payload(**changes), headers=admin)
+def test_invalid_payload_is_rejected(client, admin, db_session, changes, expected):
+    response = client.post(URL, json=payload(**changes), headers=admin)
 
     assert response.status_code == 422
     assert expected in str(response.json()["details"])
-    assert await count(db_session, Company) == 0
+    assert count(db_session, Company) == 0
 
 
-async def test_natural_person_client(client, admin):
-    data = await create(
+def test_natural_person_client(client, admin):
+    data = create(
         client,
         admin,
         rut={
@@ -332,90 +332,90 @@ async def test_natural_person_client(client, admin):
     assert data["company"]["display_name"] == "Juan Pablo Restrepo"
 
 
-async def test_nothing_is_saved_if_something_fails(client, admin, db_session, monkeypatch):
+def test_nothing_is_saved_if_something_fails(client, admin, db_session, monkeypatch):
     """Si falla a mitad de camino (aquí, al crear el 2.º usuario), no queda nada guardado,
     ni siquiera el grupo nuevo."""
     original = ClientService._add_user
     calls = {"n": 0}
 
-    async def fail_on_second_user(self, company, item, actor):
+    def fail_on_second_user(self, company, item, actor):
         calls["n"] += 1
         if calls["n"] == 2:
             raise BusinessRuleError("Simulated failure")
-        return await original(self, company, item, actor)
+        return original(self, company, item, actor)
 
     monkeypatch.setattr(ClientService, "_add_user", fail_on_second_user)
-    response = await client.post(URL, json=payload(group_name="Grupo X"), headers=admin)
+    response = client.post(URL, json=payload(group_name="Grupo X"), headers=admin)
 
     assert response.status_code == 422
     for model in (Group, Company, CompanyTaxResponsibility, CompanyRutVersion, CompanyUser):
-        assert await count(db_session, model) == 0
+        assert count(db_session, model) == 0
 
 
 # ── Paso 1: NIT existente ──
 
 
-async def test_nit_check(client, admin):
+def test_nit_check(client, admin):
     url = "/api/v1/companies/nit-check"
-    missing = (await client.get(url, params={"nit": "900123456"}, headers=admin)).json()["data"]
+    missing = (client.get(url, params={"nit": "900123456"}, headers=admin)).json()["data"]
     assert missing == {"exists": False, "company_id": None, "group_id": None, "display_name": None}
 
-    created = await create(client, admin, group_name="Grupo Andina")
-    check = (await client.get(url, params={"nit": "900123456"}, headers=admin)).json()["data"]
+    created = create(client, admin, group_name="Grupo Andina")
+    check = (client.get(url, params={"nit": "900123456"}, headers=admin)).json()["data"]
     assert check == {
         "exists": True,
         "company_id": created["company"]["id"],
         "group_id": created["company"]["group"]["id"],
         "display_name": "Comercializadora Andina SAS",
     }
-    assert (await client.get(url, params={"nit": "90-1"}, headers=admin)).status_code == 422
+    assert (client.get(url, params={"nit": "90-1"}, headers=admin)).status_code == 422
 
 
 # ── Catálogo de grupos ──
 
 
-async def test_search_groups(client, admin):
-    first = await create(client, admin, group_name="Grupo Sacyr")
-    await create(client, admin, group_id=first["company"]["group"]["id"], rut=OTHER_COMPANY_RUT)
-    await client.post(GROUPS, json={"name": "Grupo Muisca"}, headers=admin)
+def test_search_groups(client, admin):
+    first = create(client, admin, group_name="Grupo Sacyr")
+    create(client, admin, group_id=first["company"]["group"]["id"], rut=OTHER_COMPANY_RUT)
+    client.post(GROUPS, json={"name": "Grupo Muisca"}, headers=admin)
 
-    async def names(q):
-        response = await client.get(GROUPS, params={"q": q}, headers=admin)
+    def names(q):
+        response = client.get(GROUPS, params={"q": q}, headers=admin)
         assert response.status_code == 200, response.text
         return [(g["name"], g["companies"]) for g in response.json()["data"]]
 
-    assert await names(None) == [("Grupo Muisca", 0), ("Grupo Sacyr", 2)]
-    assert await names("SÁCYR") == [("Grupo Sacyr", 2)]  # sin importar mayúsculas ni tildes
-    assert await names("nada") == []
+    assert names(None) == [("Grupo Muisca", 0), ("Grupo Sacyr", 2)]
+    assert names("SÁCYR") == [("Grupo Sacyr", 2)]  # sin importar mayúsculas ni tildes
+    assert names("nada") == []
 
 
-async def test_create_and_rename_group(client, admin):
-    created = await client.post(GROUPS, json={"name": "Grupo Sacyr"}, headers=admin)
+def test_create_and_rename_group(client, admin):
+    created = client.post(GROUPS, json={"name": "Grupo Sacyr"}, headers=admin)
     assert created.status_code == 201, created.text
     group = created.json()["data"]
 
     # Repetido, escrito distinto: 409 con el grupo existente
-    again = await client.post(GROUPS, json={"name": "grupo  SACYR"}, headers=admin)
+    again = client.post(GROUPS, json={"name": "grupo  SACYR"}, headers=admin)
     assert again.status_code == 409
     assert again.json()["details"]["group_id"] == group["id"]
 
-    renamed = await client.patch(
+    renamed = client.patch(
         f"{GROUPS}/{group['id']}", json={"name": "Grupo Sacyr Colombia"}, headers=admin
     )
     assert renamed.status_code == 200, renamed.text
     assert renamed.json()["data"]["name"] == "Grupo Sacyr Colombia"
 
-    other = (await client.post(GROUPS, json={"name": "Otro"}, headers=admin)).json()["data"]
-    clash = await client.patch(
+    other = (client.post(GROUPS, json={"name": "Otro"}, headers=admin)).json()["data"]
+    clash = client.patch(
         f"{GROUPS}/{other['id']}", json={"name": "grupo sacyr colombia"}, headers=admin
     )
     assert clash.status_code == 409
     assert (
-        await client.patch(f"{GROUPS}/{uuid4()}", json={"name": "X"}, headers=admin)
+        client.patch(f"{GROUPS}/{uuid4()}", json={"name": "X"}, headers=admin)
     ).status_code == 404
 
 
-async def test_groups_require_clientes_crear(client, staff):
-    asociado = await staff("asociado@jhrwise.com", SystemRole.ASOCIADO)
-    assert (await client.get(GROUPS, headers=asociado)).status_code == 403
-    assert (await client.post(GROUPS, json={"name": "X"}, headers=asociado)).status_code == 403
+def test_groups_require_clientes_crear(client, staff):
+    asociado = staff("asociado@jhrwise.com", SystemRole.ASOCIADO)
+    assert (client.get(GROUPS, headers=asociado)).status_code == 403
+    assert (client.post(GROUPS, json={"name": "X"}, headers=asociado)).status_code == 403

@@ -12,13 +12,13 @@ from app.shared.repository import BaseRepository
 class EngagementRepository(BaseRepository[Engagement]):
     model = Engagement
 
-    async def list_for_company(
+    def list_for_company(
         self, company_id: UUID
     ) -> Sequence[tuple[Engagement, str | None, str | None]]:
         """Compromisos de la empresa, del año gravable más reciente al más antiguo, con
         los nombres del socio y el gerente."""
         partner, manager = aliased(User), aliased(User)
-        result = await self.session.execute(
+        result = self.session.execute(
             select(Engagement, partner.full_name, manager.full_name)
             .outerjoin(partner, partner.id == Engagement.partner_user_id)
             .outerjoin(manager, manager.id == Engagement.manager_user_id)
@@ -27,8 +27,8 @@ class EngagementRepository(BaseRepository[Engagement]):
         )
         return result.tuples().all()
 
-    async def exists(self, company_id: UUID, service_type: str, fiscal_year: int) -> bool:
-        result = await self.session.execute(
+    def exists(self, company_id: UUID, service_type: str, fiscal_year: int) -> bool:
+        result = self.session.execute(
             self.base_query().where(
                 Engagement.company_id == company_id,
                 Engagement.service_type == service_type,

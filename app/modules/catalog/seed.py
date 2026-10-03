@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.modules.catalog.models import Obligation, ObligationNature, Service, ServiceType
 
@@ -49,14 +49,12 @@ class SeedResult:
     services: int = 0
 
 
-async def seed_catalog(
-    session: AsyncSession, tenant_id: UUID, actor_id: UUID | None = None
-) -> SeedResult:
+def seed_catalog(session: Session, tenant_id: UUID, actor_id: UUID | None = None) -> SeedResult:
     """Crea en la organización lo que falte del catálogo inicial. No hace commit."""
     created = SeedResult()
 
-    async def find(model, name: str):
-        return await session.scalar(
+    def find(model, name: str):
+        return session.scalar(
             select(model).where(
                 model.tenant_id == tenant_id,
                 func.lower(model.name) == name.lower(),
@@ -66,7 +64,7 @@ async def seed_catalog(
 
     obligations: dict[str, Obligation] = {}
     for name, description, nature in OBLIGATIONS:
-        obligation = await find(Obligation, name)
+        obligation = find(Obligation, name)
         if obligation is None:
             obligation = Obligation(
                 tenant_id=tenant_id,
@@ -81,17 +79,17 @@ async def seed_catalog(
 
     service_types: dict[str, ServiceType] = {}
     for name in SERVICE_TYPES:
-        service_type = await find(ServiceType, name)
+        service_type = find(ServiceType, name)
         if service_type is None:
             service_type = ServiceType(tenant_id=tenant_id, name=name, created_by=actor_id)
             session.add(service_type)
             created.service_types += 1
         service_types[name] = service_type
-    await session.flush()
+    session.flush()
 
     for obligation_name, type_name in SERVICES:
         obligation, service_type = obligations[obligation_name], service_types[type_name]
-        exists = await session.scalar(
+        exists = session.scalar(
             select(Service.id).where(
                 Service.tenant_id == tenant_id,
                 Service.obligation_id == obligation.id,
@@ -109,5 +107,5 @@ async def seed_catalog(
                 )
             )
             created.services += 1
-    await session.flush()
+    session.flush()
     return created

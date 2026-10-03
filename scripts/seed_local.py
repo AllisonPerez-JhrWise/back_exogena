@@ -7,14 +7,13 @@ En AWS la firma y las personas las crea la plataforma, nunca este script.
 Uso: make seed
 """
 
-import asyncio
 import os
 import sys
 from datetime import timedelta
 from uuid import UUID, uuid4
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy import URL, create_engine, text
+from sqlalchemy.orm import Session
 
 from app.core.config import Environment, settings
 from app.core.security import create_access_token
@@ -35,37 +34,44 @@ PEOPLE = [
 def superuser_url() -> str:
     """Las tablas de la plataforma tienen seguridad por filas: se escriben como superusuario."""
     user, password = os.environ["POSTGRES_USER"], os.environ["POSTGRES_PASSWORD"]
-    return f"postgresql+asyncpg://{user}:{password}@db:5432/{os.environ['POSTGRES_DB']}"
+    return URL.create(
+        "postgresql+psycopg",
+        username=user,
+        password=password,
+        host="db",
+        port=5432,
+        database=os.environ["POSTGRES_DB"],
+    ).render_as_string(hide_password=False)
 
 
-async def get_or_create(
-    session: AsyncSession, find: str, insert: str, params: dict, new_id: UUID | None = None
+def get_or_create(
+    session: Session, find: str, insert: str, params: dict, new_id: UUID | None = None
 ) -> UUID:
-    found = await session.scalar(text(find), params)
+    found = session.scalar(text(find), params)
     if found:
         return found
     new_id = new_id or uuid4()
-    await session.execute(text(insert), {**params, "id": new_id})
+    session.execute(text(insert), {**params, "id": new_id})
     return new_id
 
 
-async def add_person(session: AsyncSession, firm_id: UUID, email: str, name: str, role: str):
+def add_person(session: Session, firm_id: UUID, email: str, name: str, role: str):
     """Persona con membresía activa en la firma y ese rol del sistema."""
-    user_id = await get_or_create(
+    user_id = get_or_create(
         session,
         "SELECT id FROM public.users WHERE email = :email",
         "INSERT INTO public.users (id, email, full_name, is_active) "
         "VALUES (:id, :email, :name, true)",
         {"email": email, "name": name},
     )
-    membership_id = await get_or_create(
+    membership_id = get_or_create(
         session,
         "SELECT id FROM public.memberships WHERE user_id = :user_id AND tenant_id = :tenant_id",
         "INSERT INTO public.memberships (id, user_id, tenant_id, status) "
         "VALUES (:id, :user_id, :tenant_id, 'active')",
         {"user_id": user_id, "tenant_id": firm_id},
     )
-    await session.execute(
+    session.execute(
         text(
             "INSERT INTO public.membership_roles (membership_id, role_id) "
             "SELECT :membership_id, id FROM public.roles "
@@ -77,14 +83,14 @@ async def add_person(session: AsyncSession, firm_id: UUID, email: str, name: str
     return user_id
 
 
-async def main() -> int:
+def main() -> int:
     if settings.environment != Environment.LOCAL:
         print("ERROR: este script solo corre con ENVIRONMENT=local")
         return 1
 
-    engine = create_async_engine(superuser_url())
-    async with AsyncSession(engine, expire_on_commit=False) as session:
-        firm_id = await get_or_create(
+    engine = create_engine(superuser_url())
+    with Session(engine, expire_on_commit=False) as session:
+        firm_id = get_or_create(
             session,
             "SELECT id FROM public.tenants WHERE slug = :slug",
             "INSERT INTO public.tenants (id, slug, name, kind, status) "
@@ -92,11 +98,11 @@ async def main() -> int:
             {"slug": FIRM_SLUG, "name": FIRM_NAME},
             new_id=FIRM_ID,
         )
-        people = [await add_person(session, firm_id, *person) for person in PEOPLE]
+        people = [add_person(session, firm_id, *person) for person in PEOPLE]
         admin_id = people[0]
-        result = await seed_catalog(session, firm_id, admin_id)
-        await session.commit()
-    await engine.dispose()
+        result = seed_catalog(session, firm_id, admin_id)
+        session.commit()
+    engine.dispose()
 
     token = create_access_token(admin_id, expires_delta=timedelta(hours=12))
     names = ", ".join(f"{name} ({role})" for _, name, role in PEOPLE)
@@ -114,4 +120,4 @@ async def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    sys.exit(main())

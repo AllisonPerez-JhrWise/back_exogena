@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.core.auth import Principal
 from app.core.database import set_db_context
@@ -33,14 +33,14 @@ class EngagementService:
     """Crea compromisos. Los métodos `prepare` y `add` NO hacen commit: los usa también
     la creación de clientes, dentro de su propia transacción."""
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: Session):
         self.session = session
         self.engagements = EngagementRepository(session)
         self.companies = CompanyRepository(session)
         self.platform = PlatformRepository(session)
 
-    async def list_for_company(self, company_id: UUID) -> list[EngagementRead]:
-        rows = await self.engagements.list_for_company(company_id)
+    def list_for_company(self, company_id: UUID) -> list[EngagementRead]:
+        rows = self.engagements.list_for_company(company_id)
         return [
             EngagementRead(
                 id=e.id,
@@ -57,10 +57,10 @@ class EngagementService:
             for e, partner, manager in rows
         ]
 
-    async def get(self, engagement_id: UUID, organization_id: UUID | None) -> EngagementSummary:
+    def get(self, engagement_id: UUID, organization_id: UUID | None) -> EngagementSummary:
         """404 si no existe o es de otra organización. Si quien consulta puede ver su
         empresa lo revisa el router (ClientService.ensure_visible)."""
-        engagement = await self.engagements.get(engagement_id)
+        engagement = self.engagements.get(engagement_id)
         if engagement is None or (
             organization_id and engagement.organization_id != organization_id
         ):
@@ -73,23 +73,23 @@ class EngagementService:
             status=engagement.status,
         )
 
-    async def create_for_company(
+    def create_for_company(
         self, company_id: UUID, item: EngagementIn, tenant_id: UUID | None, actor: Principal
     ) -> EngagementRead:
         """POST /companies/{company_id}/engagements. La empresa debe ser de la
         organización de quien crea y estar activa (un cliente inactivo no recibe
         compromisos nuevos)."""
-        company = await self.companies.get(company_id)
+        company = self.companies.get(company_id)
         if company is None or (tenant_id and company.organization_id != tenant_id):
             raise NotFoundError("Company not found")
         if not company.is_active:
             raise BusinessRuleError("The company is inactive", details={"cause": "inactive"})
-        prepared = await self.prepare([item], company.organization_id, actor)
-        [created] = await self.add(prepared, company_id, actor)
-        await self.session.commit()
+        prepared = self.prepare([item], company.organization_id, actor)
+        [created] = self.add(prepared, company_id, actor)
+        self.session.commit()
         return created
 
-    async def prepare(
+    def prepare(
         self, items: list[EngagementIn], organization_id: UUID, actor: Principal
     ) -> list[PreparedEngagement]:
         """Valida los compromisos antes de guardar nada.
@@ -98,13 +98,13 @@ class EngagementService:
         personas de ella con ese rol. Los repetidos dentro de la misma petición los rechaza
         el esquema de entrada (check_no_repeated_engagements)."""
         # El equipo es de la firma: se consulta dentro de su organización (RLS)
-        await set_db_context(self.session, user_id=actor.id, tenant_id=organization_id)
+        set_db_context(self.session, user_id=actor.id, tenant_id=organization_id)
         prepared = []
         for index, item in enumerate(items):
-            partner = await self.platform.get_member_with_role(
+            partner = self.platform.get_member_with_role(
                 item.partner_user_id, organization_id, SystemRole.SOCIO
             )
-            manager = await self.platform.get_member_with_role(
+            manager = self.platform.get_member_with_role(
                 item.manager_user_id, organization_id, SystemRole.GERENTE
             )
             if partner is None or manager is None:
@@ -117,15 +117,15 @@ class EngagementService:
             prepared.append(PreparedEngagement(item, organization_id, partner, manager))
         return prepared
 
-    async def add(
+    def add(
         self, prepared: list[PreparedEngagement], company_id: UUID, actor: Principal
     ) -> list[EngagementRead]:
         created = []
         for p in prepared:
             # Hoy el único tipo de servicio es exógena
             service_type = EngagementServiceType.EXOGENA
-            await self._check_not_duplicated(company_id, service_type, p.item.fiscal_year)
-            engagement = await self.engagements.add(
+            self._check_not_duplicated(company_id, service_type, p.item.fiscal_year)
+            engagement = self.engagements.add(
                 Engagement(
                     organization_id=p.organization_id,
                     company_id=company_id,
@@ -141,13 +141,13 @@ class EngagementService:
             created.append(self._to_read(engagement, p))
         return created
 
-    async def _check_not_duplicated(
+    def _check_not_duplicated(
         self, company_id: UUID, service_type: EngagementServiceType, year: int
     ) -> None:
         """REGLA DE NEGOCIO: una empresa no tiene dos compromisos del mismo tipo de servicio
         para el mismo año gravable. Si cambia, quitar esta validación, la de
         schemas.check_no_repeated_engagements y el índice de Engagement.__table_args__."""
-        if await self.engagements.exists(company_id, service_type, year):
+        if self.engagements.exists(company_id, service_type, year):
             raise ConflictError(
                 "The company already has an engagement of this service type for this fiscal year"
             )

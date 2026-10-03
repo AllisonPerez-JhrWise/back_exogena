@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.core.auth import Principal
 from app.core.config import settings
@@ -56,21 +56,21 @@ from app.shared.pagination import Page, PageParams
 class GroupService:
     """Catálogo de grupos de la firma: se elige uno o se agrega si no está."""
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: Session):
         self.session = session
         self.groups = GroupRepository(session)
 
-    async def search(self, organization_id: UUID, text: str | None) -> list[GroupListItem]:
-        rows = await self.groups.search(organization_id, text)
+    def search(self, organization_id: UUID, text: str | None) -> list[GroupListItem]:
+        rows = self.groups.search(organization_id, text)
         return [
             GroupListItem(id=g.id, name=g.name, is_active=g.is_active, companies=n) for g, n in rows
         ]
 
-    async def create(self, organization_id: UUID, name: str, actor: Principal) -> Group:
+    def create(self, organization_id: UUID, name: str, actor: Principal) -> Group:
         """Agrega el grupo al catálogo. Si ya existe (escrito como sea), no se duplica:
         responde 409 con el grupo existente para que se elija ese. No hace commit."""
-        await self._check_name_is_free(organization_id, name)
-        return await self.groups.add(
+        self._check_name_is_free(organization_id, name)
+        return self.groups.add(
             Group(
                 organization_id=organization_id,
                 name=name,
@@ -79,32 +79,30 @@ class GroupService:
             )
         )
 
-    async def create_and_commit(self, organization_id: UUID, name: str, actor: Principal) -> Group:
-        group = await self.create(organization_id, name, actor)
-        await self.session.commit()
+    def create_and_commit(self, organization_id: UUID, name: str, actor: Principal) -> Group:
+        group = self.create(organization_id, name, actor)
+        self.session.commit()
         return group
 
-    async def rename(
-        self, organization_id: UUID, group_id: UUID, name: str, actor: Principal
-    ) -> Group:
-        group = await self.get(organization_id, group_id)
-        await self._check_name_is_free(organization_id, name, except_id=group.id)
-        group = await self.groups.update(
+    def rename(self, organization_id: UUID, group_id: UUID, name: str, actor: Principal) -> Group:
+        group = self.get(organization_id, group_id)
+        self._check_name_is_free(organization_id, name, except_id=group.id)
+        group = self.groups.update(
             group, {"name": name, "name_key": group_name_key(name), "updated_by": actor.id}
         )
-        await self.session.commit()
+        self.session.commit()
         return group
 
-    async def get(self, organization_id: UUID, group_id: UUID) -> Group:
-        group = await self.groups.get_in_organization(group_id, organization_id)
+    def get(self, organization_id: UUID, group_id: UUID) -> Group:
+        group = self.groups.get_in_organization(group_id, organization_id)
         if group is None:
             raise NotFoundError("Group not found")
         return group
 
-    async def _check_name_is_free(
+    def _check_name_is_free(
         self, organization_id: UUID, name: str, except_id: UUID | None = None
     ) -> None:
-        existing = await self.groups.get_by_name(organization_id, name)
+        existing = self.groups.get_by_name(organization_id, name)
         if existing and existing.id != except_id:
             raise ConflictError(
                 "A group with this name already exists",
@@ -117,7 +115,7 @@ class GroupService:
 
 
 class ClientService:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: Session):
         self.session = session
         self.companies = CompanyRepository(session)
         self.responsibilities = CompanyTaxResponsibilityRepository(session)
@@ -130,9 +128,7 @@ class ClientService:
 
     # ── Asistente "Nuevo cliente" ─────────────────────────────────────────
 
-    async def create(
-        self, data: ClientCreate, actor: Principal, organization_id: UUID
-    ) -> ClientCreated:
+    def create(self, data: ClientCreate, actor: Principal, organization_id: UUID) -> ClientCreated:
         """Crea en UNA operación (si algo falla, no queda nada a medias):
         1. El grupo, si llega group_name (o usa el existente de group_id). Es opcional.
         2. La empresa (el cliente) con los datos del RUT, sus responsabilidades y la
@@ -143,18 +139,18 @@ class ClientService:
 
         organization_id es la firma de quien crea (X-Tenant-Id)."""
         self._check_rut(data.rut)
-        existing = await self.companies.get_by_nit(organization_id, data.rut.nit)
+        existing = self.companies.get_by_nit(organization_id, data.rut.nit)
         if existing:
             raise ConflictError(
                 "A company with this NIT already exists in the organization",
                 details={"cause": "nit_exists", "company_id": str(existing.id)},
             )
         # Se validan antes de crear nada, dentro de la firma (socio y gerente son de ella)
-        await set_db_context(self.session, user_id=actor.id, tenant_id=organization_id)
-        engagements = await self.engagements.prepare(data.engagements, organization_id, actor)
-        group = await self._resolve_group(data, organization_id, actor)
+        set_db_context(self.session, user_id=actor.id, tenant_id=organization_id)
+        engagements = self.engagements.prepare(data.engagements, organization_id, actor)
+        group = self._resolve_group(data, organization_id, actor)
 
-        company = await self.companies.add(
+        company = self.companies.add(
             Company(
                 organization_id=organization_id,
                 group_id=group.id if group else None,
@@ -168,10 +164,10 @@ class ClientService:
             )
         )
         for code in data.rut.tax_responsibilities:
-            await self.responsibilities.add(
+            self.responsibilities.add(
                 CompanyTaxResponsibility(company_id=company.id, code=code, created_by=actor.id)
             )
-        await self.rut_versions.add(
+        self.rut_versions.add(
             CompanyRutVersion(
                 company_id=company.id,
                 generated_at=data.rut.generated_at,
@@ -185,10 +181,10 @@ class ClientService:
             )
         )
 
-        users = [await self._add_user(company, item, actor) for item in data.users]
-        created_engagements = await self.engagements.add(engagements, company.id, actor)
+        users = [self._add_user(company, item, actor) for item in data.users]
+        created_engagements = self.engagements.add(engagements, company.id, actor)
 
-        await self.session.commit()
+        self.session.commit()
         return ClientCreated(
             company=self._company_read(company, group, data.rut.tax_responsibilities),
             engagements=created_engagements,
@@ -220,27 +216,25 @@ class ClientService:
                 },
             )
 
-    async def _resolve_group(
+    def _resolve_group(
         self, data: ClientCreate, organization_id: UUID, actor: Principal
     ) -> Group | None:
         if data.group_id:
-            group = await self.groups.get(organization_id, data.group_id)
+            group = self.groups.get(organization_id, data.group_id)
             if not group.is_active:
                 raise NotFoundError("Group not found")
             return group
         if data.group_name:
-            return await self.groups.create(organization_id, data.group_name, actor)
+            return self.groups.create(organization_id, data.group_name, actor)
         return None
 
-    async def _add_user(
-        self, company: Company, item: CompanyUserIn, actor: Principal
-    ) -> CompanyUserRead:
+    def _add_user(self, company: Company, item: CompanyUserIn, actor: Principal) -> CompanyUserRead:
         """Asigna la persona a la empresa con su cargo y celular.
 
         PENDIENTE: invitarla a la firma con Identidad (POST /organizacion/miembros con el
         rol `cliente`), darle la empresa (PUT /usuarios/{id}/empresas) y guardar su
         user_id. Mientras tanto queda pendiente de invitar."""
-        user = await self.users.add(
+        user = self.users.add(
             CompanyUser(
                 company_id=company.id,
                 email=item.email.lower(),
@@ -265,15 +259,15 @@ class ClientService:
 
     # ── Pantalla de clientes ──────────────────────────────────────────────
 
-    async def list_companies(
+    def list_companies(
         self,
         actor: Principal,
         tenant_id: UUID | None,
         filters: CompanyFilters,
         params: PageParams,
     ) -> Page[CompanyListItem]:
-        scope = await self._scope(actor, tenant_id)
-        rows, total = await list_companies(self.session, scope, filters, params)
+        scope = self._scope(actor, tenant_id)
+        rows, total = list_companies(self.session, scope, filters, params)
         items = [
             CompanyListItem(
                 id=row.company.id,
@@ -295,19 +289,19 @@ class ClientService:
 
     # ── Ficha de la empresa ───────────────────────────────────────────────
 
-    async def get_detail(
+    def get_detail(
         self, actor: Principal, tenant_id: UUID | None, company_id: UUID
     ) -> CompanyDetail:
         """Con el mismo alcance que la pantalla: si quien consulta no puede ver la
         empresa, responde 404 (no 403, para no confirmar que existe)."""
-        scope = await self._scope(actor, tenant_id)
-        row = await self._visible_row(scope, company_id)
+        scope = self._scope(actor, tenant_id)
+        row = self._visible_row(scope, company_id)
         company = row.company
 
-        group = await self.groups.groups.get(company.group_id) if company.group_id else None
+        group = self.groups.groups.get(company.group_id) if company.group_id else None
         group_companies: list[GroupCompanyItem] = []
         if group:
-            siblings, _ = await list_companies(
+            siblings, _ = list_companies(
                 self.session,
                 scope,
                 CompanyFilters(group_id=group.id),
@@ -325,34 +319,26 @@ class ClientService:
                 if s.company.id != company.id
             ]
 
-        versions = await self.rut_versions.list_for(company.id)
-        names = await self.platform.names_of({v.created_by for v in versions if v.created_by})
+        versions = self.rut_versions.list_for(company.id)
+        names = self.platform.names_of({v.created_by for v in versions if v.created_by})
         return CompanyDetail(
-            company=self._company_read(
-                company, group, await self.responsibilities.codes_for(company.id)
-            ),
+            company=self._company_read(company, group, self.responsibilities.codes_for(company.id)),
             status=row.status,
             rut_date_unknown=company.rut_generated_at is None,
             group_companies=group_companies,
-            engagements=await self.engagements.list_for_company(company.id),
+            engagements=self.engagements.list_for_company(company.id),
             rut_versions=self._versions_read(versions, names),
-            users=[
-                CompanyUserRead.model_validate(u) for u in await self.users.list_for(company.id)
-            ],
+            users=[CompanyUserRead.model_validate(u) for u in self.users.list_for(company.id)],
         )
 
-    async def ensure_visible(
-        self, actor: Principal, tenant_id: UUID | None, company_id: UUID
-    ) -> None:
+    def ensure_visible(self, actor: Principal, tenant_id: UUID | None, company_id: UUID) -> None:
         """404 si quien consulta no puede ver la empresa, con el alcance de la pantalla.
         Lo usa también lo que cuelga de la empresa (p. ej. GET /engagements/{id})."""
-        await self._visible_row(await self._scope(actor, tenant_id), company_id)
+        self._visible_row(self._scope(actor, tenant_id), company_id)
 
-    async def _visible_row(self, scope: CompanyScope, company_id: UUID) -> CompanyRow:
+    def _visible_row(self, scope: CompanyScope, company_id: UUID) -> CompanyRow:
         one = PageParams(page=1, size=1)
-        rows, _ = await list_companies(
-            self.session, scope, CompanyFilters(company_id=company_id), one
-        )
+        rows, _ = list_companies(self.session, scope, CompanyFilters(company_id=company_id), one)
         if not rows:
             raise NotFoundError("Company not found")
         return rows[0]
@@ -394,7 +380,7 @@ class ClientService:
                 newer_from = version.covers_tax_year
         return result
 
-    async def _scope(self, actor: Principal, tenant_id: UUID | None) -> CompanyScope:
+    def _scope(self, actor: Principal, tenant_id: UUID | None) -> CompanyScope:
         """Alcance de la tarea (F0-02). Todos trabajan dentro de la firma (X-Tenant-Id):
         - El Administrador (clientes.crear): todas las empresas de la organización.
         - Los demás: las empresas de sus compromisos (Socio y Gerente) y las que tienen
@@ -405,14 +391,14 @@ class ClientService:
             return CompanyScope()
         if settings.auth_bypass and actor.id == settings.dev_user_id:
             return CompanyScope(organization_id=tenant_id)
-        if await self.platform.has_permission(actor.id, tenant_id, Permission.CLIENTES_CREAR):
+        if self.platform.has_permission(actor.id, tenant_id, Permission.CLIENTES_CREAR):
             return CompanyScope(organization_id=tenant_id)
         return CompanyScope(organization_id=tenant_id, user_id=actor.id)
 
     # ── Paso 1: NIT existente ─────────────────────────────────────────────
 
-    async def check_nit(self, organization_id: UUID, nit: str) -> NitCheck:
-        company = await self.companies.get_by_nit(organization_id, nit)
+    def check_nit(self, organization_id: UUID, nit: str) -> NitCheck:
+        company = self.companies.get_by_nit(organization_id, nit)
         if company is None:
             return NitCheck(exists=False)
         return NitCheck(

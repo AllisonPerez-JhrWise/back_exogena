@@ -23,12 +23,12 @@ class MemberRead(BaseModel):
     response_model=ApiResponse[list[MemberRead]],
     summary="Personas de la organización con un rol (p. ej. socios y gerentes)",
 )
-async def list_members(
+def list_members(
     role: SystemRole, session: SessionDep, actor: CanCreateClientsDep, tenant: RequiredTenantDep
 ):
     """Para los selectores de socio y gerente al crear compromisos: GET /members?role=socio.
     Solo membresías activas. Requiere `clientes.crear` (incluye asignar socio y gerente)."""
-    users = await PlatformRepository(session).list_members_with_role(tenant, role)
+    users = PlatformRepository(session).list_members_with_role(tenant, role)
     return ApiResponse(
         data=[MemberRead(user_id=u.id, full_name=u.full_name or "", email=u.email) for u in users]
     )

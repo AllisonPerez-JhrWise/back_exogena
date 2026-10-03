@@ -15,7 +15,7 @@ from app.core.middleware import RequestContextMiddleware
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    await engine.dispose()
+    engine.dispose()
 
 
 def create_app() -> FastAPI:

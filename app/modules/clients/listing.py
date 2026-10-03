@@ -8,7 +8,7 @@ from uuid import UUID
 
 from fastapi import Depends, Query
 from sqlalchemy import ColumnElement, Select, case, func, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.exceptions import BadRequestError
@@ -126,8 +126,8 @@ def _columns():
 SORTABLE = ("name", "nit", "group", "active_engagements", "rut_generated_at", "rut_updated_at")
 
 
-async def list_companies(
-    session: AsyncSession, scope: CompanyScope, filters: CompanyFilters, params: PageParams
+def list_companies(
+    session: Session, scope: CompanyScope, filters: CompanyFilters, params: PageParams
 ) -> tuple[Sequence[CompanyRow], int]:
     group, active_engagements, status = _columns()
     query: Select = (
@@ -140,9 +140,9 @@ async def list_companies(
         *_scope_conditions(scope), *_filter_conditions(filters, group, active_engagements, status)
     )
 
-    total = await session.scalar(select(func.count()).select_from(query.subquery()))
+    total = session.scalar(select(func.count()).select_from(query.subquery()))
     order = _order_by(params.sort or "name", group, active_engagements)
-    result = await session.execute(query.order_by(*order).offset(params.offset).limit(params.size))
+    result = session.execute(query.order_by(*order).offset(params.offset).limit(params.size))
     rows = [
         CompanyRow(company=c, group=g, active_engagements=n, status=CompanyStatus(s))
         for c, g, n, s in result.tuples().all()

@@ -17,8 +17,8 @@ def detail(response) -> dict:
     return response.json()["data"]
 
 
-async def test_company_detail(client, admin, screen):  # noqa: F811
-    data = detail(await client.get(f"{URL}/{screen.andina['company']['id']}", headers=admin))
+def test_company_detail(client, admin, screen):  # noqa: F811
+    data = detail(client.get(f"{URL}/{screen.andina['company']['id']}", headers=admin))
 
     company = data["company"]
     assert (company["display_name"], company["nit"], company["check_digit"]) == (
@@ -51,8 +51,8 @@ async def test_company_detail(client, admin, screen):  # noqa: F811
     assert data["users"] == []
 
 
-async def test_group_shows_the_other_companies(client, admin, screen):  # noqa: F811
-    data = detail(await client.get(f"{URL}/{screen.muisca['company']['id']}", headers=admin))
+def test_group_shows_the_other_companies(client, admin, screen):  # noqa: F811
+    data = detail(client.get(f"{URL}/{screen.muisca['company']['id']}", headers=admin))
 
     assert data["company"]["group"]["name"] == "Grupo Muisca"
     assert [(c["display_name"], c["status"]) for c in data["group_companies"]] == [
@@ -60,7 +60,7 @@ async def test_group_shows_the_other_companies(client, admin, screen):  # noqa: 
     ]
 
 
-async def test_rut_versions_and_the_years_they_cover(client, admin, screen, db_session):  # noqa: F811
+def test_rut_versions_and_the_years_they_cover(client, admin, screen, db_session):  # noqa: F811
     company_id = UUID(screen.andina["company"]["id"])
     db_session.add_all(
         [
@@ -81,9 +81,9 @@ async def test_rut_versions_and_the_years_they_cover(client, admin, screen, db_s
             ),
         ]
     )
-    await db_session.commit()
+    db_session.commit()
 
-    data = detail(await client.get(f"{URL}/{company_id}", headers=admin))
+    data = detail(client.get(f"{URL}/{company_id}", headers=admin))
 
     assert [
         (v["rut_updated_at"], v["covers_from_year"], v["covers_to_year"], v["is_historical"])
@@ -95,42 +95,38 @@ async def test_rut_versions_and_the_years_they_cover(client, admin, screen, db_s
     ]
 
 
-async def test_partner_sees_only_companies_of_his_engagements(client, screen, team, firm):  # noqa: F811
+def test_partner_sees_only_companies_of_his_engagements(client, screen, team, firm):  # noqa: F811
     socio = auth_headers(team.socio, firm)
-    assert (
-        await client.get(f"{URL}/{screen.andina['company']['id']}", headers=socio)
-    ).status_code == 200
-    assert (
-        await client.get(f"{URL}/{screen.muisca['company']['id']}", headers=socio)
-    ).status_code == 404
+    assert (client.get(f"{URL}/{screen.andina['company']['id']}", headers=socio)).status_code == 200
+    assert (client.get(f"{URL}/{screen.muisca['company']['id']}", headers=socio)).status_code == 404
 
 
-async def test_client_user_sees_its_company_but_not_the_rest_of_the_group(
+def test_client_user_sees_its_company_but_not_the_rest_of_the_group(
     client,
     screen,  # noqa: F811
     platform,
     firm,
     db_session,
 ):
-    laura = await platform.user("laura@muisca.co", "Laura Pineda")
-    await platform.member(laura, firm, SystemRole.CLIENTE)
+    laura = platform.user("laura@muisca.co", "Laura Pineda")
+    platform.member(laura, firm, SystemRole.CLIENTE)
     muisca_id = UUID(screen.muisca["company"]["id"])
     db_session.add(
         CompanyUser(company_id=muisca_id, email="laura@muisca.co", full_name="Laura", user_id=laura)
     )
-    await db_session.commit()
+    db_session.commit()
     headers = auth_headers(laura, firm)
 
-    data = detail(await client.get(f"{URL}/{muisca_id}", headers=headers))
+    data = detail(client.get(f"{URL}/{muisca_id}", headers=headers))
     assert data["group_companies"] == []  # no ve la otra empresa del grupo
     assert [u["email"] for u in data["users"]] == ["laura@muisca.co"]
     other = screen.zona_franca["company"]["id"]
-    assert (await client.get(f"{URL}/{other}", headers=headers)).status_code == 404
+    assert (client.get(f"{URL}/{other}", headers=headers)).status_code == 404
 
 
-async def test_unknown_or_unauthorized(client, admin, screen, platform, firm):  # noqa: F811
-    assert (await client.get(f"{URL}/{uuid4()}", headers=admin)).status_code == 404
+def test_unknown_or_unauthorized(client, admin, screen, platform, firm):  # noqa: F811
+    assert (client.get(f"{URL}/{uuid4()}", headers=admin)).status_code == 404
     company = screen.andina["company"]["id"]
-    assert (await client.get(f"{URL}/{company}")).status_code == 401
-    outsider = auth_headers(await platform.user("externo@x.co"), firm)
-    assert (await client.get(f"{URL}/{company}", headers=outsider)).status_code == 403
+    assert (client.get(f"{URL}/{company}")).status_code == 401
+    outsider = auth_headers(platform.user("externo@x.co"), firm)
+    assert (client.get(f"{URL}/{company}", headers=outsider)).status_code == 403

@@ -20,7 +20,7 @@ engagements_router = APIRouter()
     status_code=status.HTTP_201_CREATED,
     summary="Crear un compromiso de una empresa existente",
 )
-async def create_engagement(
+def create_engagement(
     company_id: UUID,
     data: EngagementIn,
     service: EngagementServiceDep,
@@ -31,7 +31,7 @@ async def create_engagement(
     gerente"). Nace en estado `por_iniciar`."""
     return ApiResponse(
         message="Engagement created",
-        data=await service.create_for_company(company_id, data, tenant, actor),
+        data=service.create_for_company(company_id, data, tenant, actor),
     )
 
 
@@ -40,7 +40,7 @@ async def create_engagement(
     response_model=ApiResponse[EngagementSummary],
     summary="Un compromiso, con su obligación y su tipo de servicio",
 )
-async def get_engagement(
+def get_engagement(
     engagement_id: UUID,
     service: EngagementServiceDep,
     clients: ClientServiceDep,
@@ -50,6 +50,6 @@ async def get_engagement(
     """Requiere `clientes.leer`. Con el mismo alcance que la ficha de la empresa: si
     quien consulta no puede ver la empresa del compromiso, 404 (no 403, para no
     confirmar que existe)."""
-    engagement = await service.get(engagement_id, tenant)
-    await clients.ensure_visible(actor, tenant, engagement.company_id)
+    engagement = service.get(engagement_id, tenant)
+    clients.ensure_visible(actor, tenant, engagement.company_id)
     return ApiResponse(data=engagement)

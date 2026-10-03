@@ -1,7 +1,7 @@
 import uuid
 
 import pytest
-from httpx import ASGITransport, AsyncClient
+from fastapi.testclient import TestClient
 
 from app.core.auth import Principal, get_current_principal
 from app.main import app
@@ -13,13 +13,10 @@ def principal() -> Principal:
 
 
 @pytest.fixture
-async def client():
+def client():
     """Cliente sin base de datos: reemplaza las dependencias de service que necesites."""
-    async with AsyncClient(
-        transport=ASGITransport(app=app, raise_app_exceptions=False),
-        base_url="http://test",
-    ) as ac:
-        yield ac
+    with TestClient(app, raise_server_exceptions=False) as test_client:
+        yield test_client
     app.dependency_overrides.clear()
 
 

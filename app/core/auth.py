@@ -26,7 +26,7 @@ class Principal(BaseModel):
     email: str | None = None
 
 
-async def get_current_principal(
+def get_current_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> Principal:
     if not credentials:

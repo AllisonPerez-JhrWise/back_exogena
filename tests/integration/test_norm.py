@@ -33,17 +33,17 @@ def threshold(**changes) -> Threshold:
     return Threshold(**{**data, **changes})
 
 
-async def test_one_uvt_value_per_year(db_session):
-    await save(db_session, uvt())
-    await assert_rejected(db_session, uvt(value=60_000))
-    await save(db_session, uvt(year=2026))
+def test_one_uvt_value_per_year(db_session):
+    save(db_session, uvt())
+    assert_rejected(db_session, uvt(value=60_000))
+    save(db_session, uvt(year=2026))
 
 
-async def test_same_threshold_once_per_validity(db_session):
-    await save(db_session, threshold(year_to=2025))
-    await assert_rejected(db_session, threshold())
+def test_same_threshold_once_per_validity(db_session):
+    save(db_session, threshold(year_to=2025))
+    assert_rejected(db_session, threshold())
     # Si la norma cambia, el tope nuevo rige desde otro año
-    await save(db_session, threshold(year_from=2026, value_uvt=3_000))
+    save(db_session, threshold(year_from=2026, value_uvt=3_000))
 
 
 @pytest.mark.parametrize(
@@ -56,33 +56,33 @@ async def test_same_threshold_once_per_validity(db_session):
     ],
     ids=["uvt-en-cero", "aplica-a-invalido", "tope-en-cero", "vigencia-al-reves"],
 )
-async def test_values_are_enforced(db_session, obj):
-    await assert_rejected(db_session, obj)
+def test_values_are_enforced(db_session, obj):
+    assert_rejected(db_session, obj)
 
 
-async def test_rut_box_dictionary(db_session):
+def test_rut_box_dictionary(db_session):
     """Es el diccionario de la norma: no guarda el RUT de ningún cliente."""
     box = RutBox(box_code="53", name="Responsabilidades, calidades y atributos")
-    await save(db_session, box)
-    await save(db_session, RutBoxCode(rut_box_id=box.id, code="05", name="Renta"))
-    await assert_rejected(db_session, RutBoxCode(rut_box_id=box.id, code="05", name="Otra"))
-    await assert_rejected(db_session, RutBox(box_code="53", name="Repetida"))
-    await assert_rejected(db_session, RutBox(box_code="5A", name="Con letra"))
+    save(db_session, box)
+    save(db_session, RutBoxCode(rut_box_id=box.id, code="05", name="Renta"))
+    assert_rejected(db_session, RutBoxCode(rut_box_id=box.id, code="05", name="Otra"))
+    assert_rejected(db_session, RutBox(box_code="53", name="Repetida"))
+    assert_rejected(db_session, RutBox(box_code="5A", name="Con letra"))
 
 
-async def test_formats_and_concepts(db_session):
+def test_formats_and_concepts(db_session):
     f1001 = Format(number="1001", version=10, name="Pagos o abonos en cuenta", year_from=2025)
-    await save(db_session, f1001)
+    save(db_session, f1001)
     # Una versión nueva de la DIAN es otra fila
-    await save(db_session, Format(number="1001", version=11, name="Pagos", year_from=2026))
-    await assert_rejected(db_session, Format(number="1001", version=10, name="X", year_from=2025))
-    await assert_rejected(db_session, Format(number="101", version=1, name="X", year_from=2025))
+    save(db_session, Format(number="1001", version=11, name="Pagos", year_from=2026))
+    assert_rejected(db_session, Format(number="1001", version=10, name="X", year_from=2025))
+    assert_rejected(db_session, Format(number="101", version=1, name="X", year_from=2025))
 
     concept = FormatConcept(
         format_id=f1001.id, code="5002", description="Honorarios", year_from=2025
     )
-    await save(db_session, concept)
-    await assert_rejected(
+    save(db_session, concept)
+    assert_rejected(
         db_session,
         FormatConcept(format_id=f1001.id, code="5002", description="Repetido", year_from=2025),
     )

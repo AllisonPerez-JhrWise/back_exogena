@@ -7,32 +7,30 @@ En AWS: make aws-seed-catalog tenant=<uuid>
 """
 
 import argparse
-import asyncio
 import sys
 from uuid import UUID
 
+from sqlalchemy import create_engine
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.modules.catalog.seed import seed_catalog
 
 
-async def main(tenant_id: UUID) -> int:
-    engine = create_async_engine(
-        settings.alembic_database_url, connect_args=settings.db_connect_args
-    )
+def main(tenant_id: UUID) -> int:
+    engine = create_engine(settings.admin_database_url)
     try:
-        async with AsyncSession(engine, expire_on_commit=False) as session:
-            result = await seed_catalog(session, tenant_id)
-            await session.commit()
+        with Session(engine, expire_on_commit=False) as session:
+            result = seed_catalog(session, tenant_id)
+            session.commit()
     except IntegrityError as exc:
         if "tenants" in str(exc.orig):
             print(f"ERROR: no existe el tenant {tenant_id} en public.tenants")
             return 1
         raise
     finally:
-        await engine.dispose()
+        engine.dispose()
     print(
         f"Catálogo cargado en {tenant_id}: {result.obligations} obligaciones, "
         f"{result.service_types} tipos de servicio y {result.services} servicios nuevos."
@@ -43,4 +41,4 @@ async def main(tenant_id: UUID) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tenant-id", type=UUID, required=True, help="UUID de la organización")
-    sys.exit(asyncio.run(main(parser.parse_args().tenant_id)))
+    sys.exit(main(parser.parse_args().tenant_id))

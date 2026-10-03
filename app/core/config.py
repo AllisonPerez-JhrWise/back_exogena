@@ -1,6 +1,5 @@
 from enum import StrEnum
 from functools import lru_cache
-from typing import Any
 from uuid import UUID
 
 from pydantic import Field, model_validator
@@ -68,36 +67,19 @@ class Settings(AjustesBase):
     def is_production(self) -> bool:
         return self.environment == Environment.PRODUCTION
 
-    # ── Conexión async (PROVISIONAL: hasta pasar el servicio a síncrono con wise_comun.db) ──
-    # Se arma con URL.create y no con texto: así una contraseña con caracteres especiales
-    # (@, /, :…) no rompe la dirección.
-
-    def _async_url(self, user: str, password: str) -> str:
+    def _url(self, usuario: str, clave: str) -> str:
+        """Reemplaza el de AjustesBase, que pega la contraseña tal cual en el texto: una
+        contraseña con @, /, # o : rompería la dirección. URL.create la escapa. Como
+        database_url y admin_database_url (y wise_comun.db) la usan, todos quedan bien."""
         return URL.create(
-            "postgresql+asyncpg",
-            username=user,
-            password=password,
+            "postgresql+psycopg",
+            username=usuario,
+            password=clave,
             host=self.db_host,
             port=self.db_port,
             database=self.db_name,
+            query={"sslmode": self.db_sslmode},
         ).render_as_string(hide_password=False)
-
-    @property
-    def async_database_url(self) -> str:
-        """La app: DB_USER (en AWS, el rol de aplicación, sujeto a RLS)."""
-        return self._async_url(self.db_user, self.db_password)
-
-    @property
-    def alembic_database_url(self) -> str:
-        """Las migraciones: DB_ADMIN_USER, el dueño del schema exogena (vacío = DB_USER)."""
-        if self.db_admin_user and self.db_admin_password:
-            return self._async_url(self.db_admin_user, self.db_admin_password)
-        return self.async_database_url
-
-    @property
-    def db_connect_args(self) -> dict[str, Any]:
-        # asyncpg recibe el modo SSL como argumento (disable | prefer | require…)
-        return {"ssl": self.db_sslmode}
 
     @model_validator(mode="after")
     def _check_consistency(self) -> "Settings":

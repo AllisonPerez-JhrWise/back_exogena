@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 from sqlalchemy import ColumnElement
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.core.auth import Principal
 from app.core.exceptions import NotFoundError
@@ -30,7 +30,7 @@ class BaseService(Generic[ModelT, CreateT, UpdateT]):
     repository_class: ClassVar[type[BaseRepository]]
     not_found_message: ClassVar[str] = "Resource not found"
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: Session):
         self.session = session
         self.repository: BaseRepository[ModelT] = self.repository_class(session)
 
@@ -38,51 +38,49 @@ class BaseService(Generic[ModelT, CreateT, UpdateT]):
     def scope(self, actor: Principal | None) -> list[ColumnElement[bool]]:
         return []
 
-    async def prepare_create(
-        self, values: dict[str, Any], actor: Principal | None
-    ) -> dict[str, Any]:
+    def prepare_create(self, values: dict[str, Any], actor: Principal | None) -> dict[str, Any]:
         return values
 
-    async def prepare_update(
+    def prepare_update(
         self, obj: ModelT, values: dict[str, Any], actor: Principal | None
     ) -> dict[str, Any]:
         return values
 
     # ── CRUD (crear, leer, actualizar, borrar) ──────────────────────────────
-    async def get(self, item_id: UUID, actor: Principal | None = None) -> ModelT:
-        obj = await self.repository.get(item_id, *self.scope(actor))
+    def get(self, item_id: UUID, actor: Principal | None = None) -> ModelT:
+        obj = self.repository.get(item_id, *self.scope(actor))
         if obj is None:
             raise NotFoundError(self.not_found_message)
         return obj
 
-    async def list(self, params: PageParams, actor: Principal | None = None) -> Page[ModelT]:
-        items, total = await self.repository.list(*self.scope(actor), params=params)
+    def list(self, params: PageParams, actor: Principal | None = None) -> Page[ModelT]:
+        items, total = self.repository.list(*self.scope(actor), params=params)
         return Page.create(items, total, params)
 
-    async def create(self, data: CreateT, actor: Principal | None = None) -> ModelT:
+    def create(self, data: CreateT, actor: Principal | None = None) -> ModelT:
         values = data.model_dump()
         if actor:
             values["created_by"] = actor.id
-        values = await self.prepare_create(values, actor)
+        values = self.prepare_create(values, actor)
 
-        obj = await self.repository.add(self.repository.model.model_validate(values))
-        await self.session.commit()
+        obj = self.repository.add(self.repository.model.model_validate(values))
+        self.session.commit()
         return obj
 
-    async def update(self, item_id: UUID, data: UpdateT, actor: Principal | None = None) -> ModelT:
-        obj = await self.get(item_id, actor)
+    def update(self, item_id: UUID, data: UpdateT, actor: Principal | None = None) -> ModelT:
+        obj = self.get(item_id, actor)
         values = data.model_dump(exclude_unset=True)
         if actor:
             values["updated_by"] = actor.id
-        values = await self.prepare_update(obj, values, actor)
+        values = self.prepare_update(obj, values, actor)
 
-        obj = await self.repository.update(obj, values)
-        await self.session.commit()
+        obj = self.repository.update(obj, values)
+        self.session.commit()
         return obj
 
-    async def delete(self, item_id: UUID, actor: Principal | None = None) -> None:
-        obj = await self.get(item_id, actor)
+    def delete(self, item_id: UUID, actor: Principal | None = None) -> None:
+        obj = self.get(item_id, actor)
         if actor:
             obj.updated_by = actor.id
-        await self.repository.soft_delete(obj)
-        await self.session.commit()
+        self.repository.soft_delete(obj)
+        self.session.commit()
