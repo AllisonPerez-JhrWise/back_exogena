@@ -7,8 +7,9 @@ de la firma (migración 0016 de wise-auth). wise-comun la interpreta igual que e
 producción: `exige`, niveles y alcance son los de verdad.
 
 El equipo de cada compromiso es el que exógena le informa (PUT /compromisos/{id}/equipo,
-con `client_for`), como en producción. Las empresas del Cliente todavía se toman de
-company_users: es lo que Identidad tendrá cuando exógena se lo informe (segmento 3c).
+con `client_for`), como en producción. Las empresas del Cliente se toman de company_users
+con user_id: es lo que Identidad tendrá cuando a esa persona le asignen sus empresas
+(invitar a los usuarios del cliente no es de este servicio).
 """
 
 from __future__ import annotations
