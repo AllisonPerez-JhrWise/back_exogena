@@ -4,9 +4,21 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.auth import Principal
-from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
+from app.core.exceptions import (
+    BusinessRuleError,
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ServiceUnavailableError,
+)
+from app.core.identity import Identity, IdentityRejected, IdentityUnavailable
 from app.modules.clients.repository import CompanyRepository
-from app.modules.engagements.models import Engagement, EngagementServiceType
+from app.modules.engagements.models import (
+    TEAM_MANAGER_ROLE,
+    TEAM_PARTNER_ROLE,
+    Engagement,
+    EngagementServiceType,
+)
 from app.modules.engagements.repository import EngagementRepository
 from app.modules.engagements.schemas import (
     EngagementIn,
@@ -26,7 +38,10 @@ class PreparedEngagement:
 
 class EngagementService:
     """Crea compromisos. Los métodos `prepare` y `add` NO hacen commit: los usa también
-    la creación de clientes, dentro de su propia transacción."""
+    la creación de clientes, dentro de su propia transacción.
+
+    Al crear uno se registra su equipo (socio y gerente) en Identidad: es lo que decide
+    quién lo ve. Si Identidad lo rechaza o no responde, no se guarda nada."""
 
     def __init__(self, session: Session):
         self.session = session
@@ -68,7 +83,12 @@ class EngagementService:
         )
 
     def create_for_company(
-        self, company_id: UUID, item: EngagementIn, organization_id: UUID, actor: Principal
+        self,
+        company_id: UUID,
+        item: EngagementIn,
+        organization_id: UUID,
+        actor: Principal,
+        identity: Identity,
     ) -> EngagementRead:
         """POST /companies/{company_id}/engagements. La empresa debe ser de la
         organización de quien crea y estar activa (un cliente inactivo no recibe
@@ -79,7 +99,7 @@ class EngagementService:
         if not company.is_active:
             raise BusinessRuleError("The company is inactive", details={"cause": "inactive"})
         prepared = self.prepare([item], company.organization_id, actor)
-        [created] = self.add(prepared, company_id, actor)
+        [created] = self.add(prepared, company_id, actor, identity)
         self.session.commit()
         return created
 
@@ -89,16 +109,19 @@ class EngagementService:
         """Valida los compromisos antes de guardar nada. Los repetidos dentro de la misma
         petición los rechaza el esquema de entrada (check_no_repeated_engagements).
 
-        Socio y gerente se guardan como llegan: que sean personas de la firma lo valida
-        Identidad cuando se registran en el equipo del compromiso (PUT
-        /compromisos/{id}/equipo/{user_id}), que es quien sabe quién pertenece a ella."""
+        Que socio y gerente sean personas de la firma lo valida Identidad al registrarlos
+        en el equipo del compromiso (ver add), que es quien sabe quién pertenece a ella."""
         return [PreparedEngagement(item, organization_id) for item in items]
 
     def add(
-        self, prepared: list[PreparedEngagement], company_id: UUID, actor: Principal
+        self,
+        prepared: list[PreparedEngagement],
+        company_id: UUID,
+        actor: Principal,
+        identity: Identity,
     ) -> list[EngagementRead]:
         created = []
-        for p in prepared:
+        for index, p in enumerate(prepared):
             # Hoy el único tipo de servicio es exógena
             service_type = EngagementServiceType.EXOGENA
             self._check_not_duplicated(company_id, service_type, p.item.fiscal_year)
@@ -115,8 +138,42 @@ class EngagementService:
                     created_by=actor.id,
                 )
             )
+            self._register_team(engagement, identity, index)
             created.append(self._to_read(engagement))
         return created
+
+    @staticmethod
+    def _register_team(engagement: Engagement, identity: Identity, index: int) -> None:
+        """Informa a Identidad el socio y el gerente (PUT /compromisos/{id}/equipo/...).
+        Si son la misma persona, va una sola vez con los dos roles. Identidad valida que
+        sean personas de la firma y que quien crea tenga el permiso."""
+        team: dict[UUID, list[str]] = {}
+        for user_id, role in (
+            (engagement.partner_user_id, TEAM_PARTNER_ROLE),
+            (engagement.manager_user_id, TEAM_MANAGER_ROLE),
+        ):
+            if user_id:
+                team.setdefault(user_id, []).append(role)
+        for user_id, roles in team.items():
+            field = "partner_user_id" if TEAM_PARTNER_ROLE in roles else "manager_user_id"
+            try:
+                identity.set_engagement_team(engagement.id, engagement.company_id, user_id, roles)
+            except IdentityUnavailable:
+                raise ServiceUnavailableError(
+                    "Could not reach the identity service", details={"cause": "identity"}
+                ) from None
+            except IdentityRejected as exc:
+                if exc.status == 403:
+                    raise ForbiddenError() from None
+                details = {"engagement": index, "field": field}
+                if exc.status == 404:
+                    raise BusinessRuleError(
+                        "The person is not a member of the organization",
+                        details={**details, "cause": "not_a_member"},
+                    ) from None
+                raise BusinessRuleError(
+                    f"Identity rejected the team: {exc.detail}", details=details
+                ) from None
 
     def _check_not_duplicated(
         self, company_id: UUID, service_type: EngagementServiceType, year: int

@@ -17,6 +17,7 @@ from wise_comun import deps
 
 from app.core.auth import CLIENTES_CREAR, CLIENTES_ESTADO_CAMBIAR
 from app.core.config import settings
+from app.core.identity import DevIdentity, get_identity
 
 DEV_TOKEN = "dev"
 
@@ -56,3 +57,4 @@ def enable_dev_access(app: FastAPI) -> None:
     app.dependency_overrides[deps.token_actual] = lambda: DEV_TOKEN
     app.dependency_overrides[deps.current_claims] = lambda: {"sub": DEV_TOKEN}
     app.dependency_overrides[deps.organizacion_declarada] = _organization
+    app.dependency_overrides[get_identity] = DevIdentity

@@ -4,6 +4,7 @@ from fastapi import APIRouter, status
 
 from app.core.auth import CanCreateClientsDep, CanReadClientsDep, OrganizationDep, PrincipalDep
 from app.core.exceptions import NotFoundError
+from app.core.identity import IdentityDep
 from app.modules.clients.dependencies import ClientServiceDep
 from app.modules.engagements.dependencies import EngagementServiceDep
 from app.modules.engagements.schemas import EngagementIn, EngagementRead, EngagementSummary
@@ -28,14 +29,17 @@ def create_engagement(
     actor: PrincipalDep,
     decision: CanCreateClientsDep,
     organization: OrganizationDep,
+    identity: IdentityDep,
 ):
     """Requiere `clientes.crear` ("crear clientes y compromisos, y asignar socio y
-    gerente") sobre esa empresa. Nace en estado `created`."""
+    gerente") sobre esa empresa. Nace en estado `created`, con el socio y el gerente
+    registrados en Identidad (si alguno no es de la firma: 422; si Identidad no responde:
+    503; en ambos casos no se guarda nada)."""
     if not decision.cubre(empresa_id=company_id):
         raise NotFoundError("Company not found")
     return ApiResponse(
         message="Engagement created",
-        data=service.create_for_company(company_id, data, organization, actor),
+        data=service.create_for_company(company_id, data, organization, actor, identity),
     )
 
 

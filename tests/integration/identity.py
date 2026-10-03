@@ -6,9 +6,9 @@ personas, las organizaciones y las membresías, y arma la respuesta con la matri
 de la firma (migración 0016 de wise-auth). wise-comun la interpreta igual que en
 producción: `exige`, niveles y alcance son los de verdad.
 
-El equipo de cada compromiso (socio y gerente) y las empresas del Cliente se toman de las
-tablas de exógena (engagements y company_users): es lo que Identidad tendrá registrado
-cuando exógena se lo informe (segmentos 3b y 3c).
+El equipo de cada compromiso es el que exógena le informa (PUT /compromisos/{id}/equipo,
+con `client_for`), como en producción. Las empresas del Cliente todavía se toman de
+company_users: es lo que Identidad tendrá cuando exógena se lo informe (segmento 3c).
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from wise_comun.deps import SinAcceso
 
+from app.core.identity import IdentityRejected, IdentityUnavailable
 from app.modules.clients.models import CompanyUser
-from app.modules.engagements.models import Engagement
 
 
 class SystemRole(StrEnum):
@@ -68,6 +68,10 @@ class FakeIdentity:
     memberships: dict[tuple[UUID, UUID], tuple[SystemRole, MembershipStatus]] = field(
         default_factory=dict
     )
+    # (compromiso, persona) -> (organización, empresa, roles): compromiso_equipo
+    team: dict[tuple[UUID, UUID], tuple[UUID, UUID, list[str]]] = field(default_factory=dict)
+    # Para probar qué pasa si Identidad se cae
+    unavailable: bool = False
 
     # ── Lo que antes se escribía en las tablas de public ──
 
@@ -88,6 +92,13 @@ class FakeIdentity:
         status: MembershipStatus = MembershipStatus.ACTIVE,
     ) -> None:
         self.memberships[(user_id, organization_id)] = (role, status)
+
+    def is_active_member(self, user_id: UUID, organization_id: UUID) -> bool:
+        _, status = self.memberships.get((user_id, organization_id), (None, None))
+        return status == MembershipStatus.ACTIVE
+
+    def client_for(self, organization_id: UUID) -> FakeIdentityClient:
+        return FakeIdentityClient(self, organization_id)
 
     def knows(self, token: str) -> bool:
         return any(token == token_for(u) for u in self.people)
@@ -120,7 +131,11 @@ class FakeIdentity:
             for code, (scope, kind, perms) in MATRIX.items()
         }
         answer["generales"] = [role] if role in GENERAL_ROLES else []
-        answer["compromisos"] = self._team(db, user_id, organization)
+        answer["compromisos"] = {
+            str(engagement): {"empresa_id": str(company), "roles": roles, "formatos": []}
+            for (engagement, person), (org, company, roles) in self.team.items()
+            if person == user_id and org == organization and roles
+        }
         answer["empresas"] = [
             str(c)
             for c in db.scalars(
@@ -131,22 +146,21 @@ class FakeIdentity:
         ]
         return answer
 
-    @staticmethod
-    def _team(db: Session, user_id: UUID, organization: UUID) -> dict[str, Any]:
-        """Compromisos donde la persona es socio o gerente."""
-        team: dict[str, Any] = {}
-        rows = db.execute(
-            select(Engagement.id, Engagement.company_id, Engagement.partner_user_id).where(
-                Engagement.organization_id == organization,
-                Engagement.is_deleted.is_(False),
-                (Engagement.partner_user_id == user_id) | (Engagement.manager_user_id == user_id),
-            )
-        )
-        for engagement_id, company_id, partner in rows:
-            role = SystemRole.SOCIO if partner == user_id else SystemRole.GERENTE
-            team[str(engagement_id)] = {
-                "empresa_id": str(company_id),
-                "roles": [role],
-                "formatos": [],
-            }
-        return team
+
+@dataclass
+class FakeIdentityClient:
+    """Lo que exógena le informa a Identidad, en nombre de quien hace la petición."""
+
+    identity: FakeIdentity
+    organization_id: UUID
+    calls: list[tuple[UUID, UUID, list[str]]] = field(default_factory=list)
+
+    def set_engagement_team(
+        self, engagement_id: UUID, company_id: UUID, user_id: UUID, roles: list[str]
+    ) -> None:
+        if self.identity.unavailable:
+            raise IdentityUnavailable
+        # Como Identidad: la persona tiene que ser miembro de la organización (si no, 404)
+        if not self.identity.is_active_member(user_id, self.organization_id):
+            raise IdentityRejected(404, "esa persona no es miembro de la organizacion")
+        self.identity.team[(engagement_id, user_id)] = (self.organization_id, company_id, roles)

@@ -25,12 +25,15 @@ from wise_comun import db as wise_db
 from wise_comun import deps
 from wise_comun.deps import CABECERA_ORGANIZACION
 
+from app.core.auth import OrganizationDep
 from app.core.config import settings
 from app.core.exceptions import UnauthorizedError
+from app.core.identity import get_identity
 from app.main import app
 from app.shared.models import DB_SCHEMA, SQLModel, load_all_models
 from tests.integration.identity import (
     FakeIdentity,
+    FakeIdentityClient,
     MembershipStatus,
     SystemRole,
     token_for,
@@ -109,11 +112,16 @@ def client(db_session, platform, monkeypatch):
             raise UnauthorizedError("Invalid token")
         return {"sub": token}
 
+    def identity_client(organization: OrganizationDep) -> FakeIdentityClient:
+        """Lo que exógena le informa a Identidad queda en el doble."""
+        return platform.client_for(organization)
+
     # Sin caché: cada petición vuelve a preguntar (en una prueba el alcance cambia)
     monkeypatch.setattr(deps, "_VIGENCIA_CACHE", 0)
     deps.registrar_resolutor(platform.resolve)
     app.dependency_overrides[wise_db.get_db] = override_get_db
     app.dependency_overrides[deps.current_claims] = claims
+    app.dependency_overrides[get_identity] = identity_client
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

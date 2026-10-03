@@ -10,6 +10,7 @@ from app.core.auth import (
     PrincipalDep,
     require_whole_organization,
 )
+from app.core.identity import IdentityDep
 from app.modules.clients.dependencies import ClientServiceDep, GroupServiceDep
 from app.modules.clients.listing import CompanyFiltersDep
 from app.modules.clients.schemas import (
@@ -45,12 +46,15 @@ def create_client(
     actor: PrincipalDep,
     decision: CanCreateClientsDep,
     organization: OrganizationDep,
+    identity: IdentityDep,
 ):
     """Crea en una sola operación la empresa (el cliente) con su RUT, su grupo (uno
     existente con `group_id`, uno nuevo con `group_name`, o ninguno), los compromisos y
     los usuarios. Si algo falla, no se crea nada."""
     require_whole_organization(decision)
-    return ApiResponse(message="Client created", data=service.create(data, actor, organization))
+    return ApiResponse(
+        message="Client created", data=service.create(data, actor, organization, identity)
+    )
 
 
 # ── Catálogo de grupos (paso 1: elegir un grupo o agregarlo si no está) ─────

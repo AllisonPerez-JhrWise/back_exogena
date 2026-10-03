@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from app.modules.clients.models import Company
 from app.modules.engagements.models import Engagement
 from tests.integration.conftest import auth_headers
-from tests.integration.identity import SystemRole
+from tests.integration.identity import MembershipStatus, SystemRole
 from tests.integration.test_create_client import OTHER_COMPANY_RUT, payload
 from tests.integration.test_create_client import URL as CLIENTS_URL
 
@@ -270,3 +270,75 @@ def test_get_engagement_unknown_or_unauthorized(client, admin, team, platform, f
     assert (client.get(url)).status_code == 401
     outsider = auth_headers(platform.user("externo@x.co"), firm)
     assert (client.get(url, headers=outsider)).status_code == 403
+
+
+# ── El equipo se registra en Identidad (PUT /compromisos/{id}/equipo/{user_id}) ──
+
+
+def test_team_is_registered_in_identity(client, admin, team, platform, firm):
+    created = create_engagement(client, admin, team)
+    engagement_id, company_id = UUID(created["id"]), UUID(created["company_id"])
+
+    assert platform.team[(engagement_id, team.socio)] == (firm, company_id, ["socio"])
+    assert platform.team[(engagement_id, team.gerente)] == (firm, company_id, ["gerente"])
+
+
+def test_same_person_as_partner_and_manager_goes_once(client, admin, team, platform, firm):
+    body = payload()
+    body["engagements"] = [engagement(team, manager_user_id=team.socio)]
+    response = client.post(CLIENTS_URL, json=body, headers=admin)
+
+    assert response.status_code == 201, response.text
+    engagement_id = UUID(response.json()["data"]["engagements"][0]["id"])
+    assert [roles for (e, _), (_, _, roles) in platform.team.items() if e == engagement_id] == [
+        ["socio", "gerente"]
+    ]
+
+
+@pytest.mark.parametrize("field", ["partner_user_id", "manager_user_id"])
+def test_person_outside_the_firm_is_rejected_and_nothing_is_saved(
+    client, admin, team, platform, db_session, field
+):
+    """Identidad responde 404 (no es miembro): 422 con el campo, y no queda nada."""
+    outsider = platform.user("externo@x.co")
+    body = payload()
+    body["engagements"] = [engagement(team, **{field: outsider})]
+
+    response = client.post(CLIENTS_URL, json=body, headers=admin)
+
+    assert response.status_code == 422
+    assert response.json()["details"] == {
+        "engagement": 0,
+        "field": field,
+        "cause": "not_a_member",
+    }
+    assert count(db_session, Company) == 0
+    assert count(db_session) == 0
+
+
+def test_revoked_partner_is_rejected(client, admin, team, platform, firm):
+    ex_socio = platform.user("ex.socio@jhrwise.com")
+    platform.member(ex_socio, firm, SystemRole.SOCIO, MembershipStatus.REVOKED)
+    company_id = create_client(client, admin)["company"]["id"]
+
+    response = client.post(
+        f"/api/v1/companies/{company_id}/engagements",
+        json=engagement(team, partner_user_id=ex_socio),
+        headers=admin,
+    )
+    assert response.status_code == 422
+    assert response.json()["details"]["field"] == "partner_user_id"
+
+
+def test_identity_down_saves_nothing(client, admin, team, platform, db_session):
+    """Si Identidad no responde: 503, el usuario vuelve a intentar, y no queda nada."""
+    platform.unavailable = True
+    body = payload()
+    body["engagements"] = [engagement(team)]
+
+    response = client.post(CLIENTS_URL, json=body, headers=admin)
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "service_unavailable"
+    assert count(db_session, Company) == 0
+    assert count(db_session) == 0

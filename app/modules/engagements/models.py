@@ -22,6 +22,11 @@ class EngagementServiceType(StrEnum):
     EXOGENA = "exogena"
 
 
+# Roles de compromiso con que se registra el equipo en Identidad (códigos de su catálogo)
+TEAM_PARTNER_ROLE = "socio"
+TEAM_MANAGER_ROLE = "gerente"
+
+
 class EngagementStatus(StrEnum):
     """Estados del compromiso. Se guarda el código; el front muestra la etiqueta."""
 

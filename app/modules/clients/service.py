@@ -8,6 +8,7 @@ from wise_comun.acceso import Decision
 from app.core.auth import Principal
 from app.core.config import settings
 from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
+from app.core.identity import Identity
 from app.modules.clients.listing import (
     CompanyFilters,
     CompanyRow,
@@ -125,12 +126,15 @@ class ClientService:
 
     # ── Asistente "Nuevo cliente" ─────────────────────────────────────────
 
-    def create(self, data: ClientCreate, actor: Principal, organization_id: UUID) -> ClientCreated:
+    def create(
+        self, data: ClientCreate, actor: Principal, organization_id: UUID, identity: Identity
+    ) -> ClientCreated:
         """Crea en UNA operación (si algo falla, no queda nada a medias):
         1. El grupo, si llega group_name (o usa el existente de group_id). Es opcional.
         2. La empresa (el cliente) con los datos del RUT, sus responsabilidades y la
            primera versión del RUT con sus dos fechas.
-        3. Los compromisos del paso 3 (opcional), en estado por_iniciar.
+        3. Los compromisos del paso 3 (opcional), en estado created, con su socio y su
+           gerente registrados en Identidad.
         4. Los usuarios del paso 4 (opcional): ven solo esta empresa, y quedan pendientes
            de invitar (invitarlos a la firma es de Identidad: POST /organizacion/miembros).
 
@@ -178,7 +182,7 @@ class ClientService:
         )
 
         users = [self._add_user(company, item, actor) for item in data.users]
-        created_engagements = self.engagements.add(engagements, company.id, actor)
+        created_engagements = self.engagements.add(engagements, company.id, actor, identity)
 
         self.session.commit()
         return ClientCreated(
