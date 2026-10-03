@@ -21,6 +21,10 @@ from sqlmodel import Field
 
 from app.shared.models import DB_SCHEMA, BaseTable, join_name_parts
 
+# El NIT sin dígito de verificación: solo dígitos, de 6 a 10, como en todos los
+# servicios (wise_comun.nit.PATRON). Texto: los ceros a la izquierda se conservan
+NIT_PATTERN = r"^[0-9]{6,10}$"
+
 
 class PersonType(StrEnum):
     """Tipo de persona según el RUT."""
@@ -85,7 +89,7 @@ class Company(BaseTable):
     __table_args__ = (
         # El NIT no se repite dentro de la organización (entre empresas no borradas)
         _active_unique("ux_companies_organization_nit", "organization_id", "nit"),
-        CheckConstraint("nit ~ '^[0-9]{5,15}$'", name="nit_digits"),
+        CheckConstraint("nit ~ '^[0-9]{6,10}$'", name="nit_digits"),
         CheckConstraint("check_digit ~ '^[0-9]$'", name="check_digit_digit"),
         CheckConstraint("person_type IN ('natural', 'juridica')", name="person_type_valid"),
         CheckConstraint("department_code ~ '^[0-9]{2}$'", name="department_code_dane"),

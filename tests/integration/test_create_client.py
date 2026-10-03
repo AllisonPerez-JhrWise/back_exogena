@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select
+from wise_comun.nit import digito_verificacion
 
 from app.core.exceptions import BusinessRuleError
 from app.modules.clients.models import (
@@ -19,7 +20,6 @@ from app.modules.clients.models import (
     CompanyUser,
     Group,
 )
-from app.modules.clients.nit import calculate_dv
 from app.modules.clients.service import ClientService
 from tests.integration.conftest import auth_headers
 from tests.integration.identity import MembershipStatus, SystemRole
@@ -320,7 +320,7 @@ def test_natural_person_client(client, admin):
         admin,
         rut={
             "nit": "1020304050",
-            "check_digit": calculate_dv("1020304050"),
+            "check_digit": str(digito_verificacion("1020304050")),
             "person_type": "natural",
             "legal_name": None,
             "first_name": "Juan",
@@ -367,7 +367,40 @@ def test_nit_check(client, admin):
         "group_id": created["company"]["group"]["id"],
         "display_name": "Comercializadora Andina SAS",
     }
+    # Como lo transcribe el RUT: se limpia y se encuentra igual
+    dotted = client.get(url, params={"nit": "900.123.456-8"}, headers=admin).json()["data"]
+    assert dotted["company_id"] == created["company"]["id"]
     assert (client.get(url, params={"nit": "90-1"}, headers=admin)).status_code == 422
+
+
+# ── El NIT se escribe igual en todos los servicios (wise_comun.nit) ──
+
+
+def test_nit_as_printed_in_the_rut_is_cleaned(client, admin, db_session):
+    """Con puntos y el dígito tras un guion: se guarda en solo dígitos, con el DV aparte."""
+    body = payload()
+    body["rut"]["nit"] = "900.123.456-8"
+    del body["rut"]["check_digit"]
+
+    response = client.post(URL, json=body, headers=admin)
+
+    assert response.status_code == 201, response.text
+    company = db_session.scalar(select(Company))
+    assert (company.nit, company.check_digit) == ("900123456", "8")
+
+
+@pytest.mark.parametrize(
+    "nit",
+    ["12345", "12345678901", "900.123.456-1"],
+    ids=["5-digitos", "11-digitos", "dv-que-no-cuadra"],
+)
+def test_nit_outside_the_rule_is_rejected(client, admin, db_session, nit):
+    body = payload()
+    body["rut"]["nit"] = nit
+    body["rut"].pop("check_digit")
+
+    assert client.post(URL, json=body, headers=admin).status_code == 422
+    assert count(db_session, Company) == 0
 
 
 # ── Catálogo de grupos ──

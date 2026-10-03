@@ -3,9 +3,9 @@ from typing import Annotated
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, model_validator
+from wise_comun.nit import digito_verificacion, separar
 
-from app.modules.clients.models import CompanyStatus, PersonType, RutStatus
-from app.modules.clients.nit import calculate_dv
+from app.modules.clients.models import NIT_PATTERN, CompanyStatus, PersonType, RutStatus
 from app.modules.engagements.schemas import (
     EngagementIn,
     EngagementRead,
@@ -26,8 +26,8 @@ class RutIn(BaseModel):
     llegan a través del front: este servicio no procesa el PDF."""
 
     nit: str = Field(
-        pattern=r"^[0-9]{5,15}$",
-        description="Sin dígito de verificación. En persona natural, el número de identificación",
+        pattern=NIT_PATTERN,
+        description="Sin dígito de verificación (con puntos o con el DV tras un guion, se limpia)",
     )
     check_digit: str = Field(pattern=r"^[0-9]$")
     person_type: PersonType
@@ -50,9 +50,20 @@ class RutIn(BaseModel):
     generated_at: date = Field(description="'Fecha generación documento PDF' (pie del RUT)")
     rut_updated_at: date | None = Field(default=None, description="Fecha de actualización")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _clean_nit(cls, data):
+        """El NIT como lo transcribe el RUT ("900.123.456-8") queda en solo dígitos y
+        su dígito de verificación aparte, con la función común de la plataforma
+        (wise_comun.nit.separar): así se escribe igual en todos los servicios."""
+        if isinstance(data, dict) and isinstance(data.get("nit"), str):
+            nit, dv = separar(data["nit"], data.get("check_digit"))
+            data = {**data, "nit": nit, "check_digit": dv}
+        return data
+
     @model_validator(mode="after")
     def _check_rut(self) -> "RutIn":
-        if calculate_dv(self.nit) != self.check_digit:
+        if str(digito_verificacion(self.nit)) != self.check_digit:
             raise ValueError("The verification digit (check_digit) does not match the NIT")
         if self.person_type == PersonType.JURIDICA and not self.legal_name:
             raise ValueError("legal_name is required for a juridica client")

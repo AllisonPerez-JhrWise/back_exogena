@@ -6,9 +6,9 @@ from uuid import UUID
 
 import pytest
 from sqlalchemy import text, update
+from wise_comun.nit import digito_verificacion
 
 from app.modules.clients.models import Company, CompanyUser
-from app.modules.clients.nit import calculate_dv
 from tests.integration.conftest import auth_headers
 from tests.integration.identity import SystemRole
 from tests.integration.test_create_client import OTHER_COMPANY_RUT, payload
@@ -39,7 +39,7 @@ def create(client, admin, **changes) -> dict:
 def rut(nit: str, name: str) -> dict:
     return {
         "nit": nit,
-        "check_digit": calculate_dv(nit),
+        "check_digit": str(digito_verificacion(nit)),
         "legal_name": name,
         "tax_responsibilities": [],
     }

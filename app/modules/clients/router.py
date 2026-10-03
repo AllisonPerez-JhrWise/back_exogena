@@ -1,7 +1,9 @@
+import re
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Query, status
+from wise_comun.nit import separar
 
 from app.core.auth import (
     CanCreateClientsDep,
@@ -10,9 +12,11 @@ from app.core.auth import (
     PrincipalDep,
     require_whole_organization,
 )
+from app.core.exceptions import BusinessRuleError
 from app.core.identity import IdentityDep
 from app.modules.clients.dependencies import ClientServiceDep, GroupServiceDep
 from app.modules.clients.listing import CompanyFiltersDep
+from app.modules.clients.models import NIT_PATTERN
 from app.modules.clients.schemas import (
     ClientCreate,
     ClientCreated,
@@ -143,11 +147,18 @@ def check_nit(
     actor: PrincipalDep,
     decision: CanCreateClientsDep,
     organization: OrganizationDep,
-    nit: Annotated[str, Query(pattern=r"^[0-9]{5,15}$", description="Sin dígito de verificación")],
+    nit: Annotated[
+        str, Query(max_length=20, description="Con o sin puntos y dígito de verificación")
+    ],
 ):
     """Si existe, el front ofrece abrir la empresa existente en lugar de crear otra."""
     require_whole_organization(decision)
-    return ApiResponse(data=service.check_nit(organization, nit))
+    clean, _ = separar(nit)
+    if not clean or not re.fullmatch(NIT_PATTERN, clean):
+        raise BusinessRuleError(
+            "The NIT must have 6 to 10 digits", details={"field": "nit", "cause": "nit_format"}
+        )
+    return ApiResponse(data=service.check_nit(organization, clean))
 
 
 # Va después de /nit-check: si no, "nit-check" se tomaría como un company_id
