@@ -31,7 +31,8 @@ COMPOSE_TEST := docker compose -f docker-compose.test.yml
 # en Windows, make le pasa cada comando a sh con la codificacion antigua y se dañan.
 
 .PHONY: help up down restart status logs shell psql reset migrate migration db-check \
-        seed aws-status aws-sql aws-migrate aws-seed-catalog db-sync-cloud test venv test-unit lint format clean check-docker
+        seed auth-up auth-down aws-status aws-sql aws-migrate aws-seed-catalog db-sync-cloud test venv \
+        test-unit lint format clean check-docker
 
 help: ## Muestra los comandos disponibles
 	@printf "\n$(BOLD)Comandos disponibles$(RESET)  (uso: make <comando>)\n"
@@ -148,6 +149,33 @@ db-sync-cloud: check-docker .env.aws ## Solo lectura: copia de AWS la estructura
 	$(AWS_RUN) python scripts/cloud_catalogs.py > $(DB_INIT)/.catalogos.tmp
 	@mv $(DB_INIT)/.catalogos.tmp $(DB_INIT)/20_catalogos.sql
 	@printf "$(GREEN)OK - Copiado. Revisa los cambios con git diff $(DB_INIT) y aplica con: make reset$(RESET)\n"
+
+##@ Identidad (wise-auth en local, contra la base de AWS)
+
+# Los repos wise-auth y wise-comun deben estar al lado de este (en el Escritorio). wise-auth
+# no tiene base local: usa la de AWS (schema identidad) con las credenciales de su .env
+# (las escribe wise-erp-infra/ops/set-db-env.sh). Corre SIN las del administrador
+# (DB_ADMIN_*): asi no puede migrar ni cambiar la estructura de la base de produccion.
+AUTH_REPO := ../wise-auth
+AUTH_NAME := wise-auth-local
+
+auth-up: check-docker ## Enciende Identidad (wise-auth) en el puerto 8002 para probar con token
+	@[ -f $(AUTH_REPO)/.env ] || { printf "$(RED)ERROR - Falta $(AUTH_REPO)/.env.$(RESET) Corre en Git Bash: cd ../wise-erp-infra && ./ops/set-db-env.sh\n"; exit 1; }
+	@grep -q '^DB_USER=identidad_app' $(AUTH_REPO)/.env || printf "$(YELLOW)AVISO - El .env de wise-auth no usa identidad_app: corre ../wise-erp-infra/ops/set-db-env.sh$(RESET)\n"
+	docker build -q -t $(AUTH_NAME) -f docker/wise-auth.Dockerfile --build-context wise_comun=../wise-comun $(AUTH_REPO)
+	@docker rm -f $(AUTH_NAME) >/dev/null 2>&1 || true
+	docker run -d --name $(AUTH_NAME) -p 8002:8002 --env-file $(AUTH_REPO)/.env \
+	  -e DB_ADMIN_USER= -e DB_ADMIN_PASSWORD= $(AUTH_NAME)
+	@for i in $$(seq 1 30); do curl -fs http://localhost:8002/health >/dev/null 2>&1 && break; sleep 1; done
+	@if curl -fs --max-time 20 http://localhost:8002/health/db >/dev/null 2>&1; then \
+	  printf "\n$(GREEN)OK - Identidad lista en http://localhost:8002$(RESET) (exogena la usa con IDENTIDAD_URL)\n\n"; \
+	else \
+	  printf "\n$(RED)ERROR - Identidad no llega a la base.$(RESET) Autoriza tu IP: cd ../wise-erp-infra && ./ops/db-acceso.sh mi-ip\n"; \
+	  printf "Logs: docker logs $(AUTH_NAME)\n\n"; exit 1; \
+	fi
+
+auth-down: ## Apaga Identidad (wise-auth)
+	docker rm -f $(AUTH_NAME)
 
 ##@ Pruebas y calidad
 
