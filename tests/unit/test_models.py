@@ -9,7 +9,6 @@ from app.modules.clients.models import (
     PersonType,
 )
 from app.modules.clients.schemas import CompanyUserIn
-from app.modules.platform.models import Membership, Tenant, User
 from app.shared.models import (
     DB_SCHEMA,
     SQLModel,
@@ -39,8 +38,6 @@ def test_own_tables_live_in_service_schema():
     # También con __table_args__ en forma de tupla (índices y checks)
     for model in (Company, CompanyTaxResponsibility, CompanyRutVersion, CompanyUser, Group):
         assert model.__table__.schema == DB_SCHEMA
-    for model in (User, Tenant, Membership):
-        assert model.__table__.schema is None  # schema por defecto (public)
 
 
 def test_with_schema_keeps_explicit_schema_and_other_args():

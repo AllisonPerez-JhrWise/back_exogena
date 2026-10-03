@@ -3,10 +3,10 @@ from datetime import date
 from uuid import UUID
 
 from sqlalchemy.orm import Session
+from wise_comun.acceso import Decision
 
 from app.core.auth import Principal
 from app.core.config import settings
-from app.core.database import set_db_context
 from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
 from app.modules.clients.listing import (
     CompanyFilters,
@@ -48,8 +48,6 @@ from app.modules.clients.schemas import (
 )
 from app.modules.engagements.schemas import PersonRef
 from app.modules.engagements.service import EngagementService
-from app.modules.platform.models import Permission
-from app.modules.platform.repository import PlatformRepository
 from app.shared.pagination import Page, PageParams
 
 
@@ -122,7 +120,6 @@ class ClientService:
         self.rut_versions = CompanyRutVersionRepository(session)
         self.users = CompanyUserRepository(session)
         self.groups = GroupService(session)
-        self.platform = PlatformRepository(session)
         # Comparte la sesión: los compromisos quedan en esta misma transacción
         self.engagements = EngagementService(session)
 
@@ -137,7 +134,7 @@ class ClientService:
         4. Los usuarios del paso 4 (opcional): ven solo esta empresa, y quedan pendientes
            de invitar (invitarlos a la firma es de Identidad: POST /organizacion/miembros).
 
-        organization_id es la firma de quien crea (X-Tenant-Id)."""
+        organization_id es la firma de quien crea (X-Organization-Id)."""
         self._check_rut(data.rut)
         existing = self.companies.get_by_nit(organization_id, data.rut.nit)
         if existing:
@@ -145,8 +142,7 @@ class ClientService:
                 "A company with this NIT already exists in the organization",
                 details={"cause": "nit_exists", "company_id": str(existing.id)},
             )
-        # Se validan antes de crear nada, dentro de la firma (socio y gerente son de ella)
-        set_db_context(self.session, user_id=actor.id, tenant_id=organization_id)
+        # Se validan antes de crear nada
         engagements = self.engagements.prepare(data.engagements, organization_id, actor)
         group = self._resolve_group(data, organization_id, actor)
 
@@ -261,12 +257,12 @@ class ClientService:
 
     def list_companies(
         self,
-        actor: Principal,
-        tenant_id: UUID | None,
+        decision: Decision,
+        organization_id: UUID,
         filters: CompanyFilters,
         params: PageParams,
     ) -> Page[CompanyListItem]:
-        scope = self._scope(actor, tenant_id)
+        scope = self._scope(decision, organization_id)
         rows, total = list_companies(self.session, scope, filters, params)
         items = [
             CompanyListItem(
@@ -290,11 +286,11 @@ class ClientService:
     # ── Ficha de la empresa ───────────────────────────────────────────────
 
     def get_detail(
-        self, actor: Principal, tenant_id: UUID | None, company_id: UUID
+        self, decision: Decision, organization_id: UUID, company_id: UUID
     ) -> CompanyDetail:
         """Con el mismo alcance que la pantalla: si quien consulta no puede ver la
         empresa, responde 404 (no 403, para no confirmar que existe)."""
-        scope = self._scope(actor, tenant_id)
+        scope = self._scope(decision, organization_id)
         row = self._visible_row(scope, company_id)
         company = row.company
 
@@ -320,21 +316,20 @@ class ClientService:
             ]
 
         versions = self.rut_versions.list_for(company.id)
-        names = self.platform.names_of({v.created_by for v in versions if v.created_by})
         return CompanyDetail(
             company=self._company_read(company, group, self.responsibilities.codes_for(company.id)),
             status=row.status,
             rut_date_unknown=company.rut_generated_at is None,
             group_companies=group_companies,
             engagements=self.engagements.list_for_company(company.id),
-            rut_versions=self._versions_read(versions, names),
+            rut_versions=self._versions_read(versions),
             users=[CompanyUserRead.model_validate(u) for u in self.users.list_for(company.id)],
         )
 
-    def ensure_visible(self, actor: Principal, tenant_id: UUID | None, company_id: UUID) -> None:
+    def ensure_visible(self, decision: Decision, organization_id: UUID, company_id: UUID) -> None:
         """404 si quien consulta no puede ver la empresa, con el alcance de la pantalla.
         Lo usa también lo que cuelga de la empresa (p. ej. GET /engagements/{id})."""
-        self._visible_row(self._scope(actor, tenant_id), company_id)
+        self._visible_row(self._scope(decision, organization_id), company_id)
 
     def _visible_row(self, scope: CompanyScope, company_id: UUID) -> CompanyRow:
         one = PageParams(page=1, size=1)
@@ -345,7 +340,7 @@ class ClientService:
 
     @staticmethod
     def _versions_read(
-        versions: Sequence[CompanyRutVersion], names: dict[UUID, str]
+        versions: Sequence[CompanyRutVersion],
     ) -> list[RutVersionRead]:
         """Una versión cubre el año gravable N si su fecha de actualización es anterior o
         igual al 31 de diciembre de N; entre varias, la más reciente. Así, cubre desde el
@@ -366,12 +361,9 @@ class ClientService:
                     covers_from_year=version.covers_tax_year,
                     covers_to_year=covers_to,
                     is_historical=version.is_historical,
+                    # El nombre lo tiene Identidad: el front lo toma de los miembros
                     uploaded_by=(
-                        PersonRef(
-                            user_id=version.created_by, full_name=names.get(version.created_by, "")
-                        )
-                        if version.created_by
-                        else None
+                        PersonRef(user_id=version.created_by) if version.created_by else None
                     ),
                     uploaded_at=version.created_at,
                 )
@@ -380,20 +372,18 @@ class ClientService:
                 newer_from = version.covers_tax_year
         return result
 
-    def _scope(self, actor: Principal, tenant_id: UUID | None) -> CompanyScope:
-        """Alcance de la tarea (F0-02). Todos trabajan dentro de la firma (X-Tenant-Id):
-        - El Administrador (clientes.crear): todas las empresas de la organización.
-        - Los demás: las empresas de sus compromisos (Socio y Gerente) y las que tienen
-          asignadas (el Cliente, por company_users).
-          Senior y Asociado verán las de los compromisos donde estén asignados cuando
-          exista el equipo del compromiso."""
-        if tenant_id is None:  # solo AUTH_BYPASS sin DEV_TENANT_ID (pruebas locales)
-            return CompanyScope()
-        if settings.auth_bypass and actor.id == settings.dev_user_id:
-            return CompanyScope(organization_id=tenant_id)
-        if self.platform.has_permission(actor.id, tenant_id, Permission.CLIENTES_CREAR):
-            return CompanyScope(organization_id=tenant_id)
-        return CompanyScope(organization_id=tenant_id, user_id=actor.id)
+    @staticmethod
+    def _scope(decision: Decision, organization_id: UUID) -> CompanyScope:
+        """Alcance de la tarea (F0-02), según lo que respondió Identidad:
+        - Con el permiso sobre toda la organización (el Administrador): todas sus empresas.
+        - Si no: las empresas de sus compromisos (Socio, Gerente, Senior, Asociado) y las
+          que tiene asignadas (el Cliente)."""
+        if decision.toda_la_organizacion:
+            return CompanyScope(organization_id=organization_id)
+        return CompanyScope(
+            organization_id=organization_id,
+            company_ids=decision.empresas | decision.empresas_de_compromisos,
+        )
 
     # ── Paso 1: NIT existente ─────────────────────────────────────────────
 

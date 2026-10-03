@@ -1,7 +1,7 @@
 """POST /api/v1/clients: el asistente "Nuevo cliente" de punta a punta, y el catálogo de
 grupos (/groups).
 
-La empresa es el cliente; el grupo es opcional. Todo pasa dentro de la firma (X-Tenant-Id):
+La empresa es el cliente; el grupo es opcional. Todo pasa dentro de la firma (X-Organization-Id):
 los clientes no son tenants de la plataforma."""
 
 import copy
@@ -21,8 +21,8 @@ from app.modules.clients.models import (
 )
 from app.modules.clients.nit import calculate_dv
 from app.modules.clients.service import ClientService
-from app.modules.platform.models import MembershipStatus, SystemRole, Tenant, TenantKind
 from tests.integration.conftest import auth_headers
+from tests.integration.identity import MembershipStatus, SystemRole
 
 URL = "/api/v1/clients"
 GROUPS = "/api/v1/groups"
@@ -111,8 +111,7 @@ def test_new_client_without_group(client, admin, db_session):
     assert company["tax_responsibilities"] == ["05", "48", "42"]
     assert (company["rut_generated_at"], company["rut_updated_at"]) == (GENERATED, "2026-09-12")
 
-    # El cliente es un registro de la firma: no se crea ningún tenant ni ningún grupo
-    assert count(db_session, Tenant, Tenant.kind == TenantKind.CLIENT) == 0
+    # El cliente es un registro de la firma: no se crea ningún grupo
     assert count(db_session, Group) == 0
 
     # Primera versión del RUT, con sus dos fechas y el año gravable que cubre
@@ -228,7 +227,7 @@ def test_requires_clientes_crear_in_the_organization(client, staff, platform):
     assert (client.post(URL, json=PAYLOAD, headers=revoked)).status_code == 403
 
     other = platform.tenant("otra-firma")
-    headers = {**admin, "X-Tenant-Id": str(other)}
+    headers = {**admin, "X-Organization-Id": str(other)}
     assert (client.post(URL, json=PAYLOAD, headers=headers)).status_code == 403
 
 

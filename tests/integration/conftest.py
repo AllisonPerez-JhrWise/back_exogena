@@ -7,22 +7,34 @@ permisos. Aquí solo se crean las tablas de exogena.
 Cada test corre dentro de una transacción que se revierte al final, aunque los services
 hagan commit() (con join_transaction_mode se vuelve un SAVEPOINT). Los datos de prueba
 se preparan como superusuario; cada petición a la API corre como wiseerp_app, el usuario
-de la app en AWS, para que la seguridad por filas aplique como en producción.
+de la app en AWS.
+
+Identidad no existe aquí: el doble de tests/integration/identity.py responde lo que
+respondería GET /autorizacion, y wise-comun lo interpreta como en producción.
 """
 
-from uuid import UUID, uuid4
+from typing import Annotated
+from uuid import UUID
 
 import pytest
+from fastapi import Depends
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, pool, select, text
+from sqlalchemy import create_engine, pool, text
 from sqlalchemy.orm import Session
+from wise_comun import db as wise_db
+from wise_comun import deps
+from wise_comun.deps import CABECERA_ORGANIZACION
 
 from app.core.config import settings
-from app.core.database import get_session
-from app.core.security import create_access_token
+from app.core.exceptions import UnauthorizedError
 from app.main import app
-from app.modules.platform.models import MembershipStatus, Role, SystemRole, TenantKind
 from app.shared.models import DB_SCHEMA, SQLModel, load_all_models
+from tests.integration.identity import (
+    FakeIdentity,
+    MembershipStatus,
+    SystemRole,
+    token_for,
+)
 
 APP_ROLE = "wiseerp_app"
 
@@ -72,8 +84,14 @@ def db_session(engine):
 
 
 @pytest.fixture
-def client(db_session):
-    def override_get_session():
+def platform() -> FakeIdentity:
+    """Identidad en memoria: personas, organizaciones y membresías de la prueba."""
+    return FakeIdentity()
+
+
+@pytest.fixture
+def client(db_session, platform, monkeypatch):
+    def override_get_db():
         # Igual que la app real: corre como wiseerp_app y, si la petición falla,
         # se revierte lo que no se confirmó
         db_session.execute(text(f"SET ROLE {APP_ROLE}"))
@@ -85,90 +103,34 @@ def client(db_session):
         finally:
             db_session.execute(text("RESET ROLE"))
 
-    app.dependency_overrides[get_session] = override_get_session
+    def claims(token: Annotated[str, Depends(deps.token_actual)]) -> dict:
+        """En vez de validar el token contra Cognito: solo los del doble son válidos."""
+        if not platform.knows(token):
+            raise UnauthorizedError("Invalid token")
+        return {"sub": token}
+
+    # Sin caché: cada petición vuelve a preguntar (en una prueba el alcance cambia)
+    monkeypatch.setattr(deps, "_VIGENCIA_CACHE", 0)
+    deps.registrar_resolutor(platform.resolve)
+    app.dependency_overrides[wise_db.get_db] = override_get_db
+    app.dependency_overrides[deps.current_claims] = claims
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+    deps.registrar_resolutor(deps._por_http)
 
 
-# ── Datos de la plataforma (se insertan como superusuario, sin seguridad por filas) ──
-
-
-class Platform:
-    """Crea personas, tenants y membresías en las tablas de public.
-
-    Cada método confirma (commit = liberar el SAVEPOINT): así una petición que falla y
-    revierte no se lleva los datos de prueba. Todo se revierte igual al final del test."""
-
-    def __init__(self, session: Session):
-        self.session = session
-
-    def user(self, email: str, full_name: str = "Persona Prueba") -> UUID:
-        user_id = uuid4()
-        self.session.execute(
-            text(
-                "INSERT INTO public.users (id, email, full_name, is_active) "
-                "VALUES (:id, :email, :full_name, true)"
-            ),
-            {"id": user_id, "email": email.lower(), "full_name": full_name},
-        )
-        self.session.commit()
-        return user_id
-
-    def tenant(self, slug: str, kind: TenantKind = TenantKind.INTERNAL) -> UUID:
-        tenant_id = uuid4()
-        self.session.execute(
-            text(
-                "INSERT INTO public.tenants (id, slug, name, kind, status) "
-                "VALUES (:id, :slug, :slug, :kind, 'active')"
-            ),
-            {"id": tenant_id, "slug": slug, "kind": kind},
-        )
-        self.session.commit()
-        return tenant_id
-
-    def member(
-        self,
-        user_id: UUID,
-        tenant_id: UUID,
-        role: SystemRole,
-        status: MembershipStatus = MembershipStatus.ACTIVE,
-    ) -> UUID:
-        role_id = self.session.scalar(
-            select(Role.id).where(Role.code == role, Role.tenant_id.is_(None))
-        )
-        membership_id = uuid4()
-        self.session.execute(
-            text(
-                "INSERT INTO public.memberships (id, user_id, tenant_id, status) "
-                "VALUES (:id, :user_id, :tenant_id, :status)"
-            ),
-            {"id": membership_id, "user_id": user_id, "tenant_id": tenant_id, "status": status},
-        )
-        self.session.execute(
-            text("INSERT INTO public.membership_roles (membership_id, role_id) VALUES (:m, :r)"),
-            {"m": membership_id, "r": role_id},
-        )
-        self.session.commit()
-        return membership_id
-
-
-def auth_headers(user_id: UUID, tenant_id: UUID | None = None) -> dict[str, str]:
-    """Encabezados de una petición autenticada (token provisional, hasta tener Cognito)."""
-    headers = {"Authorization": f"Bearer {create_access_token(user_id)}"}
-    if tenant_id:
-        headers[settings.tenant_header] = str(tenant_id)
+def auth_headers(user_id: UUID, organization_id: UUID | None = None) -> dict[str, str]:
+    """Encabezados de una petición autenticada: token y organización (X-Organization-Id)."""
+    headers = {"Authorization": f"Bearer {token_for(user_id)}"}
+    if organization_id:
+        headers[CABECERA_ORGANIZACION] = str(organization_id)
     return headers
 
 
 @pytest.fixture
-def platform(db_session) -> Platform:
-    return Platform(db_session)
-
-
-@pytest.fixture
 def firm(platform) -> UUID:
-    """El tenant de la firma (kind=internal)."""
+    """La organización de la firma."""
     return platform.tenant("jhr-wise")
 
 

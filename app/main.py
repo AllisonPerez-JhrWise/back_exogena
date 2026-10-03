@@ -2,11 +2,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from wise_comun.deps import CABECERA_ORGANIZACION
 
 from app import __version__
 from app.api import health, v1
 from app.core.config import Environment, settings
-from app.core.database import engine
+from app.core.database import motor
+from app.core.dev_access import enable_dev_access
 from app.core.handlers import register_exception_handlers
 from app.core.logging import setup_logging
 from app.core.middleware import RequestContextMiddleware
@@ -15,7 +17,7 @@ from app.core.middleware import RequestContextMiddleware
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    engine.dispose()
+    motor().dispose()
 
 
 def create_app() -> FastAPI:
@@ -37,7 +39,7 @@ def create_app() -> FastAPI:
         allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Request-ID", settings.tenant_header],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID", CABECERA_ORGANIZACION],
         expose_headers=["X-Request-ID"],
     )
     # Se agrega de último = es la capa más externa:
@@ -48,6 +50,9 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(v1.router, prefix=settings.api_v1_prefix)
+
+    if settings.auth_bypass:  # solo desarrollo local (ver app.core.dev_access)
+        enable_dev_access(app)
     return app
 
 

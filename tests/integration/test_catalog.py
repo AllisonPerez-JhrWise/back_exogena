@@ -7,9 +7,12 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.core.config import Settings, settings
+from app.core.dev_access import enable_dev_access
+from app.main import app
 from app.modules.catalog.models import Obligation, ObligationNature, Service, ServiceType
 from app.modules.catalog.seed import seed_catalog
 from tests.integration.conftest import auth_headers
+from tests.integration.identity import SystemRole
 
 
 class Catalog:
@@ -48,8 +51,9 @@ def catalog(db_session, firm) -> Catalog:
 
 @pytest.fixture
 def asociado(staff):
-    # Cualquier persona de la firma con clientes.leer puede consultar el catálogo
-    return staff("asociado@jhrwise.com")
+    # Quien tenga clientes.crear en alguna parte (aunque sea en Consulta) consulta el
+    # catálogo. El Administrador lo usa en el asistente "Nuevo cliente"
+    return staff("admin@jhrwise.com", SystemRole.ADMINISTRADOR)
 
 
 def test_lists_active_obligations_of_the_organization(
@@ -119,38 +123,46 @@ def test_inactive_or_foreign_obligation_is_not_found(
         assert (client.get(url, headers=asociado)).status_code == 404
 
 
-def test_requires_membership_in_the_tenant(client, platform, firm):
+def test_requires_membership_and_a_permission(client, platform, firm, staff):
     outsider = auth_headers(platform.user("externo@x.co"), firm)
+    # Un asociado sin compromisos asignados no tiene el permiso en ninguna parte
+    asociado = staff("asociado@jhrwise.com", SystemRole.ASOCIADO)
     for url in ("/api/v1/obligations", "/api/v1/service-types"):
         assert (client.get(url)).status_code == 401
         assert (client.get(url, headers=outsider)).status_code == 403
+        assert (client.get(url, headers=asociado)).status_code == 403
 
 
-# ── Modo de pruebas (AUTH_BYPASS) ──
+def test_organization_header_is_required(client, platform, firm):
+    admin_id = platform.user("admin@jhrwise.com")
+    platform.member(admin_id, firm, SystemRole.ADMINISTRADOR)
+    response = client.get("/api/v1/obligations", headers=auth_headers(admin_id))
+    assert response.status_code == 400
+
+
+# ── Modo de desarrollo local (AUTH_BYPASS) ──
 
 
 @pytest.fixture
-def auth_bypass(monkeypatch):
-    monkeypatch.setattr(settings, "auth_bypass", True)
-    # Sin firma por defecto (aunque el .env local tenga DEV_TENANT_ID): se ve todo
-    monkeypatch.setattr(settings, "dev_tenant_id", None)
+def dev_mode(client, monkeypatch, firm):
+    """Como con AUTH_BYPASS=true en local: sin token, Administrador de la firma."""
+    monkeypatch.setattr(settings, "dev_organization_id", firm)
+    enable_dev_access(app)  # el fixture client deshace todo al terminar
 
 
-def test_bypass_shows_everything_without_token_or_tenant(
-    client, auth_bypass, catalog, platform, db_session
-):
+def test_dev_mode_works_without_token(client, dev_mode, catalog, platform, db_session):
     catalog.obligation("Información exógena")
-    Catalog(db_session, platform.tenant("otra-firma")).obligation("Otra")
+    other = platform.tenant("otra-firma")
+    Catalog(db_session, other).obligation("Otra")
 
+    # Sin encabezados: la firma de DEV_ORGANIZATION_ID
     response = client.get("/api/v1/obligations")
-
     assert response.status_code == 200, response.text
-    assert [o["name"] for o in response.json()["data"]] == ["Información exógena", "Otra"]
+    assert [o["name"] for o in response.json()["data"]] == ["Información exógena"]
 
-
-def test_bypass_still_checks_a_tenant_when_it_is_sent(client, auth_bypass, platform, firm):
-    outsider = auth_headers(platform.user("externo@x.co"), firm)
-    assert (client.get("/api/v1/obligations", headers=outsider)).status_code == 403
+    # Con X-Organization-Id: esa organización
+    response = client.get("/api/v1/obligations", headers={"X-Organization-Id": str(other)})
+    assert [o["name"] for o in response.json()["data"]] == ["Otra"]
 
 
 def test_bypass_is_forbidden_in_production():

@@ -2,7 +2,7 @@ from enum import StrEnum
 from functools import lru_cache
 from uuid import UUID
 
-from pydantic import Field, model_validator
+from pydantic import model_validator
 from sqlalchemy.engine import URL
 from wise_comun.config import AjustesBase, registrar
 
@@ -38,20 +38,14 @@ class Settings(AjustesBase):
     # Tabla de versiones de Alembic propia: la base de datos RDS se comparte con otros servicios
     db_version_table: str = "alembic_version_exogena"
 
-    # ── Autenticación ─────────────────────────────────────────────────────────────
-    # El login no es de este servicio: lo hace la plataforma con Cognito.
-    # PROVISIONAL hasta tener los datos de Cognito: tokens HS256 firmados con este secreto.
-    jwt_secret: str = Field(min_length=32)
-    jwt_algorithm: str = "HS256"
-    # Encabezado con el tenant (organización) en el que trabaja el usuario
-    tenant_header: str = "X-Tenant-Id"
-    # SOLO PARA PRUEBAS mientras llegan Cognito y el tenant: sin token se actúa como
-    # dev_user_id, sin X-Tenant-Id se ve todo y no se revisan permisos. Prohibido en producción.
+    # ── Autenticación (la valida wise-comun: token de Cognito + Identidad) ───────────
+    # SOLO DESARROLLO LOCAL, para usar la API sin usuario de la plataforma: sin token ni
+    # Identidad, se actúa como dev_user_id, Administrador de la organización del encabezado
+    # X-Organization-Id (o de dev_organization_id si no llega). Prohibido en producción.
     auth_bypass: bool = False
     dev_user_id: UUID = UUID(int=0)
-    # Con AUTH_BYPASS, tenant que se usa si no llega X-Tenant-Id (la firma de `make seed`).
-    # Vacío = sin tenant: se ve todo, pero lo que necesita una organización responde 400.
-    dev_tenant_id: UUID | None = None
+    # La firma de `make seed`
+    dev_organization_id: UUID | None = None
 
     # ── Reglas del RUT (parámetros de la tarea; F0-09 aún no existe en la plataforma) ──
     # rut.dias_generacion_maxima: antigüedad máxima del PDF al cargar el RUT actual

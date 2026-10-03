@@ -2,10 +2,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
+from app.core.auth import CanCreateClientsDep, CanReadClientsDep, OrganizationDep, PrincipalDep
+from app.core.exceptions import NotFoundError
 from app.modules.clients.dependencies import ClientServiceDep
 from app.modules.engagements.dependencies import EngagementServiceDep
 from app.modules.engagements.schemas import EngagementIn, EngagementRead, EngagementSummary
-from app.modules.platform.dependencies import CanCreateClientsDep, CanReadClientsDep, TenantDep
 from app.shared.responses import ApiResponse
 
 # Se monta bajo /companies: POST /companies/{company_id}/engagements
@@ -24,32 +25,35 @@ def create_engagement(
     company_id: UUID,
     data: EngagementIn,
     service: EngagementServiceDep,
-    actor: CanCreateClientsDep,
-    tenant: TenantDep,
+    actor: PrincipalDep,
+    decision: CanCreateClientsDep,
+    organization: OrganizationDep,
 ):
     """Requiere `clientes.crear` ("crear clientes y compromisos, y asignar socio y
-    gerente"). Nace en estado `por_iniciar`."""
+    gerente") sobre esa empresa. Nace en estado `created`."""
+    if not decision.cubre(empresa_id=company_id):
+        raise NotFoundError("Company not found")
     return ApiResponse(
         message="Engagement created",
-        data=service.create_for_company(company_id, data, tenant, actor),
+        data=service.create_for_company(company_id, data, organization, actor),
     )
 
 
 @engagements_router.get(
     "/{engagement_id}",
     response_model=ApiResponse[EngagementSummary],
-    summary="Un compromiso, con su obligación y su tipo de servicio",
+    summary="Un compromiso, con su tipo de servicio",
 )
 def get_engagement(
     engagement_id: UUID,
     service: EngagementServiceDep,
     clients: ClientServiceDep,
-    actor: CanReadClientsDep,
-    tenant: TenantDep,
+    decision: CanReadClientsDep,
+    organization: OrganizationDep,
 ):
-    """Requiere `clientes.leer`. Con el mismo alcance que la ficha de la empresa: si
-    quien consulta no puede ver la empresa del compromiso, 404 (no 403, para no
-    confirmar que existe)."""
-    engagement = service.get(engagement_id, tenant)
-    clients.ensure_visible(actor, tenant, engagement.company_id)
+    """Requiere `clientes.crear` (basta Consulta). Con el mismo alcance que la ficha de
+    la empresa: si quien consulta no puede ver la empresa del compromiso, 404 (no 403,
+    para no confirmar que existe)."""
+    engagement = service.get(engagement_id, organization)
+    clients.ensure_visible(decision, organization, engagement.company_id)
     return ApiResponse(data=engagement)

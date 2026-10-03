@@ -183,15 +183,13 @@ check-docker:
 	  printf "$(RED)ERROR - Docker no esta encendido.$(RESET) Abre Docker Desktop y espera a que diga 'Engine running'.\n"; \
 	  exit 1; }
 
-# Crea el .env la primera vez, con un JWT_SECRET aleatorio (solo si no existe)
+# Crea el .env la primera vez (solo si no existe)
 .env:
 	@cp .env_example .env
-	@secret=$$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n') && \
-	  sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$$secret/" .env
-	@printf "$(GREEN)OK - Se creo .env con un JWT_SECRET nuevo$(RESET) (no se sube a git)\n"
+	@printf "$(GREEN)OK - Se creo .env a partir de .env_example$(RESET) (no se sube a git)\n"
 
 # Los comandos aws-* necesitan .env.aws con la conexión a RDS (no se sube a git)
 .env.aws:
 	@printf "$(RED)ERROR - Falta el archivo .env.aws.$(RESET) Crealo con DB_HOST, DB_PORT, DB_NAME, DB_USER,\n"
-	@printf "DB_PASSWORD, DB_SSLMODE=require, COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, ENVIRONMENT=production y JWT_SECRET.\n"
+	@printf "DB_PASSWORD, DB_SSLMODE=require, COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID e IDENTIDAD_URL, y ENVIRONMENT=production.\n"
 	@exit 1

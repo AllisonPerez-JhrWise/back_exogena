@@ -9,8 +9,8 @@ from sqlalchemy import text, update
 
 from app.modules.clients.models import Company, CompanyUser
 from app.modules.clients.nit import calculate_dv
-from app.modules.platform.models import SystemRole
 from tests.integration.conftest import auth_headers
+from tests.integration.identity import SystemRole
 from tests.integration.test_create_client import OTHER_COMPANY_RUT, payload
 from tests.integration.test_create_client import URL as CLIENTS_URL
 from tests.integration.test_engagements import engagement, team  # noqa: F401 (fixture)
@@ -177,8 +177,9 @@ def test_partner_sees_only_the_companies_of_his_engagements(client, screen, team
 
 
 def test_associate_without_engagements_sees_nothing(client, screen, staff):
+    # Sin compromisos asignados no tiene el permiso en ninguna parte (Identidad)
     asociado = staff("asociado@jhrwise.com", SystemRole.ASOCIADO)
-    assert rows(client.get(URL, headers=asociado)) == []
+    assert client.get(URL, headers=asociado).status_code == 403
 
 
 def test_client_user_sees_only_its_company(client, screen, platform, firm, db_session):

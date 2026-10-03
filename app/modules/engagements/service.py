@@ -4,7 +4,6 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.core.auth import Principal
-from app.core.database import set_db_context
 from app.core.exceptions import BusinessRuleError, ConflictError, NotFoundError
 from app.modules.clients.repository import CompanyRepository
 from app.modules.engagements.models import Engagement, EngagementServiceType
@@ -15,8 +14,6 @@ from app.modules.engagements.schemas import (
     EngagementSummary,
     PersonRef,
 )
-from app.modules.platform.models import SystemRole, User
-from app.modules.platform.repository import PlatformRepository
 
 
 @dataclass
@@ -25,8 +22,6 @@ class PreparedEngagement:
 
     item: EngagementIn
     organization_id: UUID
-    partner: User
-    manager: User
 
 
 class EngagementService:
@@ -37,7 +32,6 @@ class EngagementService:
         self.session = session
         self.engagements = EngagementRepository(session)
         self.companies = CompanyRepository(session)
-        self.platform = PlatformRepository(session)
 
     def list_for_company(self, company_id: UUID) -> list[EngagementRead]:
         rows = self.engagements.list_for_company(company_id)
@@ -50,11 +44,11 @@ class EngagementService:
                 start_date=e.start_date,
                 due_date=e.due_date,
                 status=e.status,
-                partner=_person(e.partner_user_id, partner),
-                manager=_person(e.manager_user_id, manager),
+                partner=_person(e.partner_user_id),
+                manager=_person(e.manager_user_id),
                 created_at=e.created_at,
             )
-            for e, partner, manager in rows
+            for e in rows
         ]
 
     def get(self, engagement_id: UUID, organization_id: UUID | None) -> EngagementSummary:
@@ -74,13 +68,13 @@ class EngagementService:
         )
 
     def create_for_company(
-        self, company_id: UUID, item: EngagementIn, tenant_id: UUID | None, actor: Principal
+        self, company_id: UUID, item: EngagementIn, organization_id: UUID, actor: Principal
     ) -> EngagementRead:
         """POST /companies/{company_id}/engagements. La empresa debe ser de la
         organización de quien crea y estar activa (un cliente inactivo no recibe
         compromisos nuevos)."""
         company = self.companies.get(company_id)
-        if company is None or (tenant_id and company.organization_id != tenant_id):
+        if company is None or company.organization_id != organization_id:
             raise NotFoundError("Company not found")
         if not company.is_active:
             raise BusinessRuleError("The company is inactive", details={"cause": "inactive"})
@@ -92,30 +86,13 @@ class EngagementService:
     def prepare(
         self, items: list[EngagementIn], organization_id: UUID, actor: Principal
     ) -> list[PreparedEngagement]:
-        """Valida los compromisos antes de guardar nada.
+        """Valida los compromisos antes de guardar nada. Los repetidos dentro de la misma
+        petición los rechaza el esquema de entrada (check_no_repeated_engagements).
 
-        organization_id es la firma dueña de la empresa: el socio y el gerente deben ser
-        personas de ella con ese rol. Los repetidos dentro de la misma petición los rechaza
-        el esquema de entrada (check_no_repeated_engagements)."""
-        # El equipo es de la firma: se consulta dentro de su organización (RLS)
-        set_db_context(self.session, user_id=actor.id, tenant_id=organization_id)
-        prepared = []
-        for index, item in enumerate(items):
-            partner = self.platform.get_member_with_role(
-                item.partner_user_id, organization_id, SystemRole.SOCIO
-            )
-            manager = self.platform.get_member_with_role(
-                item.manager_user_id, organization_id, SystemRole.GERENTE
-            )
-            if partner is None or manager is None:
-                field = "partner_user_id" if partner is None else "manager_user_id"
-                role = SystemRole.SOCIO if partner is None else SystemRole.GERENTE
-                raise BusinessRuleError(
-                    f"The person is not an active {role} of the organization",
-                    details={"engagement": index, "field": field},
-                )
-            prepared.append(PreparedEngagement(item, organization_id, partner, manager))
-        return prepared
+        Socio y gerente se guardan como llegan: que sean personas de la firma lo valida
+        Identidad cuando se registran en el equipo del compromiso (PUT
+        /compromisos/{id}/equipo/{user_id}), que es quien sabe quién pertenece a ella."""
+        return [PreparedEngagement(item, organization_id) for item in items]
 
     def add(
         self, prepared: list[PreparedEngagement], company_id: UUID, actor: Principal
@@ -133,12 +110,12 @@ class EngagementService:
                     fiscal_year=p.item.fiscal_year,
                     start_date=p.item.start_date,
                     due_date=p.item.due_date,
-                    partner_user_id=p.partner.id,
-                    manager_user_id=p.manager.id,
+                    partner_user_id=p.item.partner_user_id,
+                    manager_user_id=p.item.manager_user_id,
                     created_by=actor.id,
                 )
             )
-            created.append(self._to_read(engagement, p))
+            created.append(self._to_read(engagement))
         return created
 
     def _check_not_duplicated(
@@ -153,7 +130,7 @@ class EngagementService:
             )
 
     @staticmethod
-    def _to_read(engagement: Engagement, p: PreparedEngagement) -> EngagementRead:
+    def _to_read(engagement: Engagement) -> EngagementRead:
         return EngagementRead(
             id=engagement.id,
             company_id=engagement.company_id,
@@ -162,12 +139,13 @@ class EngagementService:
             start_date=engagement.start_date,
             due_date=engagement.due_date,
             status=engagement.status,
-            partner=PersonRef(user_id=p.partner.id, full_name=p.partner.full_name or ""),
-            manager=PersonRef(user_id=p.manager.id, full_name=p.manager.full_name or ""),
+            partner=_person(engagement.partner_user_id),
+            manager=_person(engagement.manager_user_id),
             created_at=engagement.created_at,
         )
 
 
-def _person(user_id: UUID | None, full_name: str | None) -> PersonRef | None:
-    """Socio o gerente para mostrar; vacío si el compromiso no lo tiene."""
-    return PersonRef(user_id=user_id, full_name=full_name or "") if user_id else None
+def _person(user_id: UUID | None) -> PersonRef | None:
+    """Socio o gerente; vacío si el compromiso no lo tiene. El nombre lo tiene Identidad:
+    el front lo toma de los miembros de la organización."""
+    return PersonRef(user_id=user_id) if user_id else None

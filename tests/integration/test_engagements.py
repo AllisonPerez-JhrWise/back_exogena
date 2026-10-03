@@ -11,10 +11,10 @@ from sqlalchemy import func, select
 
 from app.modules.clients.models import Company
 from app.modules.engagements.models import Engagement
-from app.modules.platform.models import MembershipStatus, SystemRole
 from tests.integration.conftest import auth_headers
+from tests.integration.identity import SystemRole
+from tests.integration.test_create_client import OTHER_COMPANY_RUT, payload
 from tests.integration.test_create_client import URL as CLIENTS_URL
-from tests.integration.test_create_client import payload
 
 
 @dataclass
@@ -71,13 +71,13 @@ def test_client_is_created_with_its_engagements(client, admin, team, db_session)
             e["fiscal_year"],
             e["start_date"] is not None,
             e["status"],
-            e["partner"]["full_name"],
-            e["manager"]["full_name"],
+            e["partner"]["user_id"],
+            e["manager"]["user_id"],
         )
         for e in created
     ] == [
-        ("exogena", 2025, False, "created", "Juan Restrepo", "María Gómez"),
-        ("exogena", 2026, True, "created", "Juan Restrepo", "María Gómez"),
+        ("exogena", 2025, False, "created", str(team.socio), str(team.gerente)),
+        ("exogena", 2026, True, "created", str(team.socio), str(team.gerente)),
     ]
     assert count(db_session) == 2
 
@@ -149,40 +149,8 @@ def test_dates_are_validated(client, admin, team, db_session, changes, expected)
     assert count(db_session) == 0
 
 
-@pytest.mark.parametrize(
-    "changes, field",
-    [
-        ({"partner_user_id": "gerente"}, "partner_user_id"),  # un gerente como socio
-        ({"manager_user_id": "socio"}, "manager_user_id"),  # un socio como gerente
-        ({"partner_user_id": "nadie"}, "partner_user_id"),
-    ],
-    ids=["socio-sin-rol", "gerente-sin-rol", "socio-inexistente"],
-)
-def test_team_is_validated(client, admin, team, changes, field):
-    people = {"socio": team.socio, "gerente": team.gerente, "nadie": uuid4()}
-    company_id = (create_client(client, admin))["company"]["id"]
-
-    response = client.post(
-        f"/api/v1/companies/{company_id}/engagements",
-        json=engagement(team, **{k: people[v] for k, v in changes.items()}),
-        headers=admin,
-    )
-
-    assert response.status_code == 422
-    assert response.json()["details"]["field"] == field
-
-
-def test_revoked_partner_is_rejected(client, admin, team, platform, firm):
-    ex_socio = platform.user("ex.socio@jhrwise.com")
-    platform.member(ex_socio, firm, SystemRole.SOCIO, MembershipStatus.REVOKED)
-    company_id = (create_client(client, admin))["company"]["id"]
-
-    response = client.post(
-        f"/api/v1/companies/{company_id}/engagements",
-        json=engagement(team, partner_user_id=ex_socio),
-        headers=admin,
-    )
-    assert response.status_code == 422
+# Que socio y gerente sean personas de la firma lo valida Identidad al registrarlos en el
+# equipo del compromiso (segmento 3b), no este servicio.
 
 
 def test_same_service_type_and_year_is_not_repeated(client, admin, team):
@@ -210,7 +178,7 @@ def test_repeated_engagement_in_the_form_is_rejected(client, admin, team, db_ses
 
 def test_invalid_engagement_saves_nothing(client, admin, team, db_session):
     body = payload()
-    body["engagements"] = [engagement(team, partner_user_id=uuid4())]
+    body["engagements"] = [engagement(team, due_date="2026-05-15")]  # sin hora
 
     response = client.post(CLIENTS_URL, json=body, headers=admin)
 
@@ -264,12 +232,21 @@ def test_get_engagement(client, admin, team):
 def test_partner_sees_only_his_engagements(client, admin, team, platform, firm):
     created = create_engagement(client, admin, team)
     url = f"/api/v1/engagements/{created['id']}"
+    # Otro socio, con un compromiso en otra empresa
     otro_socio = platform.user("otro.socio@jhrwise.com", "Otro Socio")
     platform.member(otro_socio, firm, SystemRole.SOCIO)
+    body = payload(rut=OTHER_COMPANY_RUT)
+    body["engagements"] = [engagement(team, partner_user_id=otro_socio)]
+    assert client.post(CLIENTS_URL, json=body, headers=admin).status_code == 201
+    # Y uno sin ningún compromiso
+    sin_compromisos = platform.user("nuevo.socio@jhrwise.com", "Nuevo Socio")
+    platform.member(sin_compromisos, firm, SystemRole.SOCIO)
 
     assert (client.get(url, headers=auth_headers(team.socio, firm))).status_code == 200
     # Fuera de su alcance: 404, como si no existiera
     assert (client.get(url, headers=auth_headers(otro_socio, firm))).status_code == 404
+    # Sin compromisos no tiene el permiso en ninguna parte: 403
+    assert (client.get(url, headers=auth_headers(sin_compromisos, firm))).status_code == 403
 
 
 def test_engagement_of_another_organization_is_not_found(client, admin, team, platform):
@@ -293,22 +270,3 @@ def test_get_engagement_unknown_or_unauthorized(client, admin, team, platform, f
     assert (client.get(url)).status_code == 401
     outsider = auth_headers(platform.user("externo@x.co"), firm)
     assert (client.get(url, headers=outsider)).status_code == 403
-
-
-# ── Selectores de socio y gerente ──
-
-
-def test_members_by_role(client, admin, team, platform, firm):
-    ex_socio = platform.user("ex.socio@jhrwise.com", "Ex Socio")
-    platform.member(ex_socio, firm, SystemRole.SOCIO, MembershipStatus.REVOKED)
-    otra = platform.tenant("otra-firma")
-    platform.member(platform.user("otro@x.co", "Otro"), otra, SystemRole.SOCIO)
-
-    socios = client.get("/api/v1/members", params={"role": "socio"}, headers=admin)
-    gerentes = client.get("/api/v1/members", params={"role": "gerente"}, headers=admin)
-
-    assert socios.status_code == 200, socios.text
-    assert [m["full_name"] for m in socios.json()["data"]] == ["Juan Restrepo"]
-    assert [m["full_name"] for m in gerentes.json()["data"]] == ["María Gómez"]
-    invalid = client.get("/api/v1/members", params={"role": "jefe"}, headers=admin)
-    assert invalid.status_code == 422

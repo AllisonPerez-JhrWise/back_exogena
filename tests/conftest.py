@@ -14,7 +14,6 @@ for name, value in {
     "COGNITO_CLIENT_ID": "test-client",
 }.items():
     os.environ.setdefault(name, value)
-os.environ.setdefault("JWT_SECRET", "test-secret-test-secret-test-secret-000")
 # Siempre apagado (aunque el .env local lo tenga encendido): los tests que lo usan lo activan
 os.environ["AUTH_BYPASS"] = "false"
 

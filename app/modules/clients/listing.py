@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.exceptions import BadRequestError
-from app.modules.clients.models import Company, CompanyStatus, CompanyUser, Group
+from app.modules.clients.models import Company, CompanyStatus, Group
 from app.modules.engagements.models import Engagement, EngagementStatus
 from app.shared.pagination import PageParams
 
@@ -72,11 +72,12 @@ CompanyFiltersDep = Annotated[CompanyFilters, Depends(get_company_filters)]
 
 @dataclass
 class CompanyScope:
-    """Qué empresas puede ver quien consulta (alcance de la tarea, F0-02)."""
+    """Qué empresas puede ver quien consulta (alcance de la tarea, F0-02, según Identidad)."""
 
-    organization_id: UUID | None = None  # la firma: el Administrador ve todas
-    # Los demás: las de sus compromisos y las que tienen asignadas
-    user_id: UUID | None = None
+    organization_id: UUID | None = None  # la firma
+    # None = todas las de la organización (el Administrador). Si no, solo estas: las de
+    # sus compromisos y las que tiene asignadas
+    company_ids: frozenset[UUID] | None = None
 
 
 @dataclass
@@ -154,29 +155,8 @@ def _scope_conditions(scope: CompanyScope) -> list[ColumnElement[bool]]:
     conditions = []
     if scope.organization_id:
         conditions.append(Company.organization_id == scope.organization_id)
-    if scope.user_id:
-        in_my_engagements = (
-            select(Engagement.id)
-            .where(
-                Engagement.company_id == Company.id,
-                Engagement.is_deleted.is_(False),
-                or_(
-                    Engagement.partner_user_id == scope.user_id,
-                    Engagement.manager_user_id == scope.user_id,
-                ),
-            )
-            .exists()
-        )
-        assigned_to_me = (
-            select(CompanyUser.id)
-            .where(
-                CompanyUser.company_id == Company.id,
-                CompanyUser.user_id == scope.user_id,
-                CompanyUser.is_deleted.is_(False),
-            )
-            .exists()
-        )
-        conditions.append(or_(in_my_engagements, assigned_to_me))
+    if scope.company_ids is not None:
+        conditions.append(Company.id.in_(scope.company_ids))
     return conditions
 
 

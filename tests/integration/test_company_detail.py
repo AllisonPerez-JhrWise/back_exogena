@@ -4,8 +4,8 @@ from datetime import date
 from uuid import UUID, uuid4
 
 from app.modules.clients.models import CompanyRutVersion, CompanyUser
-from app.modules.platform.models import SystemRole
 from tests.integration.conftest import auth_headers
+from tests.integration.identity import SystemRole
 from tests.integration.test_companies_list import screen  # noqa: F401 (fixture)
 from tests.integration.test_engagements import team  # noqa: F401 (fixture)
 
@@ -17,7 +17,7 @@ def detail(response) -> dict:
     return response.json()["data"]
 
 
-def test_company_detail(client, admin, screen):  # noqa: F811
+def test_company_detail(client, admin, screen, team):  # noqa: F811
     data = detail(client.get(f"{URL}/{screen.andina['company']['id']}", headers=admin))
 
     company = data["company"]
@@ -41,13 +41,17 @@ def test_company_detail(client, admin, screen):  # noqa: F811
         engagement["service_type"],
         engagement["fiscal_year"],
         engagement["status"],
-        engagement["partner"]["full_name"],
-        engagement["manager"]["full_name"],
-    ) == ("exogena", 2025, "created", "Juan Restrepo", "María Gómez")
+        engagement["partner"]["user_id"],
+        engagement["manager"]["user_id"],
+    ) == ("exogena", 2025, "created", str(team.socio), str(team.gerente))
+    # Los nombres los tiene Identidad: el front los toma de los miembros
+    assert engagement["partner"]["full_name"] is None
 
     [version] = data["rut_versions"]
     assert (version["covers_from_year"], version["covers_to_year"]) == (2026, None)
-    assert version["uploaded_by"]["full_name"] == "Persona Prueba"  # el administrador
+    assert version["uploaded_by"]["user_id"] == admin["Authorization"].removeprefix(
+        "Bearer token-"
+    )  # el administrador
     assert data["users"] == []
 
 

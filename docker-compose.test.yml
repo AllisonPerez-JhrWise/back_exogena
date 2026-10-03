@@ -44,7 +44,6 @@ services:
       DB_ADMIN_PASSWORD: ""
       COGNITO_USER_POOL_ID: us-east-2_test
       COGNITO_CLIENT_ID: test-client
-      JWT_SECRET: test-secret-test-secret-test-secret-000
     depends_on:
       db_test:
         condition: service_healthy
